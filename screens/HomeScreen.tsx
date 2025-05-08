@@ -29,36 +29,36 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
   const lessons: Lesson[] = [
     {
       id: '1',
-      title: 'Taxes In Bulgaria',
-      description: 'Learn about the Bulgarian tax system and how to efficiently manage your taxes.',
+      title: 'Данъци в България',
+      description: 'Научете за българската данъчна система и как ефективно да управлявате данъците си.',
       progress: 0.3,
       icon: 'file-document-outline',
     },
     {
       id: '2',
-      title: 'Mortgage and Credits',
-      description: 'Understanding mortgage options, interest rates, and credit systems.',
+      title: 'Ипотеки и кредити',
+      description: 'Разбиране на ипотечните опции, лихвените проценти и кредитните системи.',
       progress: 0.8,
       icon: 'home-city-outline',
     },
     {
       id: '3',
-      title: 'Savings/Financial Planning',
-      description: 'Build a solid financial plan and learn effective saving strategies.',
+      title: 'Спестявания/Финансово планиране',
+      description: 'Изградете солиден финансов план и научете ефективни стратегии за спестяване.',
       progress: 0.5,
       icon: 'piggy-bank-outline',
     },
     {
       id: '4',
-      title: 'Investing',
-      description: 'Introduction to investment vehicles, strategies, and risk management.',
+      title: 'Инвестиране',
+      description: 'Въведение в инвестиционните инструменти, стратегии и управление на риска.',
       progress: 0.2,
       icon: 'chart-line',
     },
     {
       id: '5',
-      title: 'Insurance',
-      description: 'Comprehensive guide to different insurance types and how to choose the right coverage.',
+      title: 'Застраховки',
+      description: 'Изчерпателно ръководство за различните видове застраховки и как да изберете правилното покритие.',
       progress: 0,
       isPremium: true,
       icon: 'shield-check-outline',
@@ -68,10 +68,10 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
   const [activeTab, setActiveTab] = useState('home');
   
   const tabs = [
-    { key: 'home', icon: 'home', label: 'Home' },
-    { key: 'leaderboard', icon: 'trophy', label: 'Leaderboard' },
-    { key: 'calendar', icon: 'calendar', label: 'Calendar' },
-    { key: 'profile', icon: 'account', label: 'Profile' },
+    { key: 'home', icon: 'home', label: 'Начало' },
+    { key: 'leaderboard', icon: 'trophy', label: 'Класация' },
+    { key: 'calendar', icon: 'calendar', label: 'Календар' },
+    { key: 'profile', icon: 'account', label: 'Профил' },
   ];
 
   const handleTabPress = (tabKey: string) => {
@@ -152,7 +152,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           textColor={lesson.isPremium ? '#fff' : colors.primary}
           onPress={() => navigation.navigate('Lesson', { lessonId: lesson.id })}
         >
-          Lessons
+          Уроци
         </Button>
         <Button 
           mode="outlined" 
@@ -163,7 +163,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           textColor={lesson.isPremium ? '#fff' : colors.primary}
           onPress={() => navigation.navigate('Quiz', { lessonId: lesson.id })}
         >
-          Exam
+          Тест
         </Button>
       </View>
     </Surface>
@@ -179,10 +179,10 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         <View style={styles.profileSection}>
           <View style={styles.userInfo}>
             <Text style={[styles.userName, { color: colors.onSurface }]}>
-              Hello, {userName}!
+              Здравей, {userName}!
             </Text>
             <Text style={[styles.userStatus, { color: colors.onSurfaceVariant }]}>
-              Beginner
+              Начинаещ
             </Text>
           </View>
           <View style={styles.badgesContainer}>
@@ -207,16 +207,16 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
           elevation={2}
         >
           <Text style={[styles.challengeTitle, { color: colors.onSurface }]}>
-            Daily Challenge
+            Дневно предизвикателство
           </Text>
           <Text style={[styles.challengeDescription, { color: colors.onSurfaceVariant }]}>
-            Complete today's challenge to test your financial knowledge and maintain your streak.
+            Изпълнете днешното предизвикателство, за да тествате финансовите си познания и да поддържате серията си.
           </Text>
           <View style={styles.challengeFooter}>
             <View style={styles.streakContainer}>
               <Icon name="fire" size={20} color="#FF6B00" />
               <Text style={[styles.streakText, { color: '#FF6B00' }]}>
-                {streakDays} day streak
+                {streakDays} дни серия
               </Text>
             </View>
             <Button 
@@ -224,7 +224,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
               onPress={() => {}}
               style={{ backgroundColor: colors.primary }}
             >
-              Start Challenge
+              Започни предизвикателство
             </Button>
           </View>
         </Surface>
@@ -232,7 +232,7 @@ export default function HomeScreen({ navigation }: HomeScreenProps) {
         {/* Financial education section */}
         <View style={styles.educationSection}>
           <Text style={[styles.sectionTitle, { color: colors.onSurface }]}>
-            Financial Education
+            Финансово образование
           </Text>
           {lessons.map(renderLessonCard)}
         </View>

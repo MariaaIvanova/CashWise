@@ -56,7 +56,7 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       </View>
       
       <TextInput
-        placeholder="Name"
+        placeholder="Име"
         value={name}
         onChangeText={setName}
         style={styles.input}
@@ -66,7 +66,7 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       />
 
       <TextInput
-        placeholder="Email"
+        placeholder="Имейл"
         value={email}
         onChangeText={setEmail}
         style={styles.input}
@@ -77,7 +77,7 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       />
       
       <TextInput
-        placeholder="Password"
+        placeholder="Парола"
         value={password}
         onChangeText={setPassword}
         secureTextEntry
@@ -93,7 +93,7 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
         onPress={handleSignUp}
         style={styles.signInButton}
       >
-        <Text style={styles.signInButtonText}>Register</Text>
+        <Text style={styles.signInButtonText}>Регистрация</Text>
       </TouchableOpacity>
       
       {/* Sign In Button */}
@@ -101,12 +101,12 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
         onPress={handleSignIn}
         style={styles.signUpButton}
       >
-        <Text style={styles.signUpButtonText}>Log In</Text>
+        <Text style={styles.signUpButtonText}>Вход</Text>
       </TouchableOpacity>
       
       <View style={styles.dividerContainer}>
         <View style={styles.dividerLine} />
-        <Text style={styles.orText}>Or register with</Text>
+        <Text style={styles.orText}>Или се регистрирайте с</Text>
         <View style={styles.dividerLine} />
       </View>
       

@@ -11,8 +11,9 @@ import { RouteProp } from '@react-navigation/native';
 interface QuizQuestion {
   question: string;
   options: string[];
-  correctAnswer: number;
+  correctAnswer: number | number[];
   explanation: string;
+  isMultipleChoice?: boolean;
 }
 
 interface RootStackParamList extends ParamListBase {
@@ -35,6 +36,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
   
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
+  const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
   const [score, setScore] = useState<number>(0);
   const [showResult, setShowResult] = useState<boolean>(false);
   const [answeredCorrectly, setAnsweredCorrectly] = useState<boolean>(false);
@@ -47,37 +49,78 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
   // Mock quiz data - would come from backend
   const quizQuestions: QuizQuestion[] = [
     {
-      question: 'Which of the following is NOT a key element of a personal budget?',
+      question: 'Каква е основната цел на потребителския кредит?',
       options: [
-        'Income',
-        'Expenses',
-        'Credit score',
-        'Savings'
+        'Закупуване на жилище',
+        'Покупка на дребни стоки като техника',
+        'Инвестиране на фондовата борса'
       ],
-      correctAnswer: 2,
-      explanation: 'Credit score is an important financial indicator, but it is not part of the basic structure of a personal budget, which consists of income, expenses, and savings.'
+      correctAnswer: 1,
+      explanation: 'Потребителските кредити са предназначени за покупка на дребни стоки като техника, мебели и други потребителски стоки.'
     },
     {
-      question: 'What is the "50/30/20 rule" in budgeting?',
+      question: 'Ако не можеш да изплатиш кредита си навреме…',
       options: [
-        '50% needs, 30% wants, 20% savings',
-        '50% housing, 30% food, 20% other expenses',
-        '50% savings, 30% investments, 20% expenses',
-        '50% expenses, 30% taxes, 20% savings'
-      ],
-      correctAnswer: 0,
-      explanation: 'The 50/30/20 rule suggests allocating income as follows: 50% for basic needs, 30% for personal wants, and 20% for savings and debt repayment.'
-    },
-    {
-      question: 'What is an emergency fund?',
-      options: [
-        'Stock investment for emergencies',
-        'Health insurance',
-        'Saved funds for unexpected expenses',
-        'Low-interest credit line'
+        'Ще заведат дело срещу теб',
+        'Ще намалят лихвата',
+        'Ще започнат наказателни лихви'
       ],
       correctAnswer: 2,
-      explanation: 'An emergency fund consists of easily accessible saved funds that cover 3-6 months of your expenses in unforeseen situations such as job loss or medical expenses.'
+      explanation: 'При забавяне на плащанията по кредита, банката започва да начислява наказателни лихви, които значително увеличават общата сума за погасяване.'
+    },
+    {
+      question: 'Кои от изброените характеристики се отнасят за бързите кредити?',
+      options: [
+        'Лесно достъпни',
+        'Подходящи само в извънредни случаи',
+        'Изискват ипотека на жилище',
+        'Обикновено с висока лихва',
+        'Погасяват се за 20–30 години'
+      ],
+      correctAnswer: [0, 1, 3],
+      isMultipleChoice: true,
+      explanation: 'Бързите кредити са лесно достъпни, подходящи само за спешни случаи и обикновено имат висока лихва. Те не изискват ипотека и имат кратък срок на погасяване.'
+    },
+    {
+      question: 'Кой от изброените кредити обикновено изисква най-дълъг срок на погасяване?',
+      options: [
+        'Потребителски',
+        'Бърз',
+        'Ипотечен'
+      ],
+      correctAnswer: 2,
+      explanation: 'Ипотечните кредити обикновено имат най-дълъг срок на погасяване, тъй като са за големи суми и закупуване на недвижим имот.'
+    },
+    {
+      question: 'Свържете термините с тяхното обяснение:',
+      options: [
+        'Лихва - Сума, която се изплаща допълнително към заема',
+        'Вноска - Част от кредита, която се плаща всеки месец',
+        'Гратисен период - Време, в което не се изисква плащане'
+      ],
+      correctAnswer: [0, 1, 2],
+      isMultipleChoice: true,
+      explanation: 'Лихвата е допълнителната сума, която се плаща за използването на кредита. Вноската е редовното месечно плащане. Гратисният период е време, през което не се изисква плащане.'
+    },
+    {
+      question: 'Какъв е основният риск при бързите кредити?',
+      options: [
+        'Бавна процедура по одобрение',
+        'Висока лихва и риск от задлъжняване',
+        'Трудност при намиране на кредитори'
+      ],
+      correctAnswer: 1,
+      explanation: 'Основният риск при бързите кредити е високата лихва и възможността за задлъжняване поради бързото одобрение и по-малко строги изисквания.'
+    },
+    {
+      question: 'Кое от следните твърдения е вярно за потребителските кредити?',
+      options: [
+        'Изискват ипотека като обезпечение',
+        'Предназначени са за покупка на жилище',
+        'Обикновено са в размер до 10 000 лв.'
+      ],
+      correctAnswer: 2,
+      explanation: 'Потребителските кредити обикновено са за по-малки суми (до 10 000 лв.) и не изискват ипотека като обезпечение.'
     }
   ];
   
@@ -140,16 +183,25 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
   
   const handleAnswerSubmit = () => {
     // If no answer is selected and time ran out, treat it as incorrect
-    if (selectedAnswer === null && timeRemaining <= 0) {
+    if ((selectedAnswer === null && !currentQuestion.isMultipleChoice) && timeRemaining <= 0) {
       setAnsweredCorrectly(false);
       setShowResult(true);
       return;
     }
     
     // If no answer is selected and timer hasn't run out, don't proceed
-    if (selectedAnswer === null) return;
+    if ((selectedAnswer === null && !currentQuestion.isMultipleChoice) || 
+        (currentQuestion.isMultipleChoice && selectedAnswers.length === 0)) return;
     
-    const isCorrect = selectedAnswer === currentQuestion.correctAnswer;
+    let isCorrect: boolean;
+    if (currentQuestion.isMultipleChoice) {
+      const correctAnswers = currentQuestion.correctAnswer as number[];
+      isCorrect = correctAnswers.length === selectedAnswers.length &&
+                 correctAnswers.every(answer => selectedAnswers.includes(answer));
+    } else {
+      isCorrect = selectedAnswer === currentQuestion.correctAnswer;
+    }
+
     if (isCorrect) {
       setScore(score + 1);
       setAnsweredCorrectly(true);
@@ -162,8 +214,9 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
   
   const handleNextQuestion = () => {
     setSelectedAnswer(null);
+    setSelectedAnswers([]);
     setShowResult(false);
-    setTimeRunOut(false); // Reset time run out state
+    setTimeRunOut(false);
     
     if (currentQuestionIndex < quizQuestions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
@@ -173,7 +226,17 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
   };
   
   const handleSelectAnswer = (index: number) => {
-    setSelectedAnswer(index);
+    if (currentQuestion.isMultipleChoice) {
+      setSelectedAnswers(prev => {
+        if (prev.includes(index)) {
+          return prev.filter(i => i !== index);
+        } else {
+          return [...prev, index];
+        }
+      });
+    } else {
+      setSelectedAnswer(index);
+    }
   };
   
   const handleSubmitAnswer = () => {
@@ -203,7 +266,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
               color={passed ? "#FFD700" : themeToUse.colors?.primary} 
             />
             <Title style={[styles.completionTitleText, { color: '#000', textAlign: 'center', marginLeft: 12 }]}>
-              Quiz Completed!
+              Тестът завършен!
             </Title>
           </View>
           
@@ -214,14 +277,14 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
               </Text>
             </View>
             <Text style={{ color: '#000', fontSize: 18, textAlign: 'center', marginTop: 12, fontWeight: '500' }}>
-              {score} out of {quizQuestions.length} correct answers
+              {score} от {quizQuestions.length} правилни отговора
             </Text>
           </View>
           
           <View style={styles.resultDetailsContainer}>
             <View style={[styles.resultDetailItem, { backgroundColor: '#ffffff' }]}>
               <MaterialCommunityIcons name="star" size={28} color="#FFD700" />
-              <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>{earnedXP} XP earned</Text>
+              <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>{earnedXP} точки спечелени</Text>
             </View>
             
             <View style={[styles.resultDetailItem, { backgroundColor: '#ffffff' }]}>
@@ -232,7 +295,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
             {score === quizQuestions.length && (
               <View style={[styles.resultDetailItem, { backgroundColor: '#ffffff' }]}>
                 <MaterialCommunityIcons name="medal" size={28} color="#FF6F00" />
-                <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>Badge "Financial Expert"</Text>
+                <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>Значка "Финансов експерт"</Text>
               </View>
             )}
           </View>
@@ -246,11 +309,11 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
                   color="#4CAF50" 
                 />
                 <Text style={{ color: '#2E7D32', fontSize: 20, fontWeight: 'bold', marginLeft: 12 }}>
-                  Congratulations!
+                  Поздравления!
                 </Text>
               </View>
               <Text style={{ color: '#2E7D32', marginTop: 12, fontSize: 16, lineHeight: 22 }}>
-                You have successfully passed this quiz. Great job on your financial knowledge!
+                Успешно преминахте този тест. Отлична работа с вашите финансови познания!
               </Text>
             </View>
           ) : (
@@ -262,11 +325,11 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
                   color="#F44336" 
                 />
                 <Text style={{ color: '#C62828', fontSize: 20, fontWeight: 'bold', marginLeft: 12 }}>
-                  Try Again!
+                  Опитайте отново!
                 </Text>
               </View>
               <Text style={{ color: '#C62828', marginTop: 12, fontSize: 16, lineHeight: 22 }}>
-                You need to achieve at least {passedPercent}% to pass the quiz. Keep learning and you'll get there!
+                Трябва да постигнете поне {passedPercent}% за да преминете теста. Продължете да учите и ще успеете!
               </Text>
             </View>
           )}
@@ -280,6 +343,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
                 setQuizComplete(false);
                 setShowResult(false);
                 setSelectedAnswer(null);
+                setSelectedAnswers([]);
                 setTimeElapsed(0);
                 setTimeRemaining(30);
               }}
@@ -288,7 +352,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
               labelStyle={styles.buttonLabel}
               color={themeToUse.colors?.primary}
             >
-              Try Again
+              Опитайте отново
             </Button>
             <Button 
               mode="outlined" 
@@ -298,7 +362,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
               labelStyle={styles.buttonLabel}
               color={themeToUse.colors?.primary}
             >
-              Back to Lesson
+              Назад към урока
             </Button>
           </View>
         </Surface>
@@ -312,7 +376,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
         <View style={styles.progressContainer}>
           <View style={styles.progressInfo}>
             <Text style={[styles.questionCounter, { color: '#000' }]}>
-              Question {currentQuestionIndex + 1}/{quizQuestions.length}
+              Въпрос {currentQuestionIndex + 1}/{quizQuestions.length}
             </Text>
             <View style={styles.timerContainer}>
               <MaterialCommunityIcons 
@@ -349,89 +413,73 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
         </View>
         
         <Surface style={[styles.questionCard, { backgroundColor: '#efefef' }]} elevation={0}>
-          {/* Time Run Out Overlay */}
-          {timeRunOut && (
-            <Animated.View 
-              style={[
-                styles.timeRunOutOverlay,
-                {
-                  opacity: fadeAnim,
-                }
-              ]}
-            >
-              <MaterialCommunityIcons name="timer-off" size={64} color="#fff" />
-              <Text style={styles.timeRunOutText}>Time's Up!</Text>
-            </Animated.View>
-          )}
-          
           <Title style={[styles.questionText, { color: '#000' }]}>
             {currentQuestion.question}
           </Title>
           
-          <RadioButton.Group
-            onValueChange={(value) => handleSelectAnswer(parseInt(value))}
-            value={selectedAnswer?.toString() || ''}
-          >
+          <View style={styles.optionsContainer}>
             {currentQuestion.options.map((option, index) => (
               <TouchableOpacity
                 key={index}
-                onPress={() => handleSelectAnswer(index)}
-                disabled={showResult}
                 style={[
-                  styles.optionContainer,
-                  { backgroundColor: '#ffffff' },
-                  selectedAnswer === index && !showResult && styles.selectedOption,
+                  styles.optionButton,
+                  (currentQuestion.isMultipleChoice ? selectedAnswers.includes(index) : selectedAnswer === index) && 
+                  styles.selectedOption,
                   showResult && index === currentQuestion.correctAnswer && styles.correctOption,
-                  showResult && selectedAnswer === index && index !== currentQuestion.correctAnswer && styles.incorrectOption
+                  showResult && 
+                  ((currentQuestion.isMultipleChoice ? selectedAnswers.includes(index) : selectedAnswer === index)) && 
+                  index !== currentQuestion.correctAnswer && 
+                  styles.incorrectOption
                 ]}
+                onPress={() => !showResult && handleSelectAnswer(index)}
+                activeOpacity={0.7}
               >
-                <RadioButton 
-                  value={index.toString()} 
-                  disabled={showResult}
-                  color={
-                    showResult
-                      ? index === currentQuestion.correctAnswer 
-                        ? '#4CAF50' 
-                        : selectedAnswer === index 
-                          ? '#F44336' 
-                          : themeToUse.colors?.primary
-                      : themeToUse.colors?.primary
+                <RadioButton
+                  value={index.toString()}
+                  status={
+                    currentQuestion.isMultipleChoice
+                      ? selectedAnswers.includes(index) ? 'checked' : 'unchecked'
+                      : selectedAnswer === index ? 'checked' : 'unchecked'
                   }
+                  onPress={() => !showResult && handleSelectAnswer(index)}
+                  color={themeToUse.colors?.primary}
                 />
                 <Text style={[
                   styles.optionText,
-                  { color: '#000000' },
-                  showResult && index === currentQuestion.correctAnswer && { color: '#2E7D32', fontWeight: 'bold' },
-                  showResult && selectedAnswer === index && index !== currentQuestion.correctAnswer && { color: '#C62828' }
+                  showResult && index === currentQuestion.correctAnswer && { color: '#4CAF50', fontWeight: 'bold' },
+                  showResult && 
+                  ((currentQuestion.isMultipleChoice ? selectedAnswers.includes(index) : selectedAnswer === index)) && 
+                  index !== currentQuestion.correctAnswer && 
+                  { color: '#F44336' }
                 ]}>
                   {option}
                 </Text>
               </TouchableOpacity>
             ))}
-          </RadioButton.Group>
-          
-          <View style={styles.buttonContainer}>
-            {!showResult ? (
-              <Button 
-                mode="contained"
-                disabled={selectedAnswer === null}
-                onPress={handleAnswerSubmit}
-                style={styles.button}
-                color={themeToUse.colors?.primary}
-              >
-                Submit Answer
-              </Button>
-            ) : (
-              <Button 
-                mode="contained"
-                onPress={handleNextQuestion}
-                style={styles.button}
-                color={themeToUse.colors?.primary}
-              >
-                {currentQuestionIndex < quizQuestions.length - 1 ? 'Next Question' : 'See Results'}
-              </Button>
-            )}
           </View>
+          
+          {!showResult ? (
+            <Button
+              mode="contained"
+              onPress={handleAnswerSubmit}
+              style={styles.submitButton}
+              disabled={
+                currentQuestion.isMultipleChoice
+                  ? selectedAnswers.length === 0
+                  : selectedAnswer === null
+              }
+            >
+              Провери отговора
+            </Button>
+          ) : (
+            <Button
+              mode="contained"
+              onPress={handleNextQuestion}
+              style={styles.submitButton}
+            >
+              {currentQuestionIndex === quizQuestions.length - 1 ? 'Завърши' : 'Следващ въпрос'}
+            </Button>
+          )}
 
           {showResult && (
             <View style={[styles.explanationContainer, { backgroundColor: answeredCorrectly ? '#E8F5E9' : '#FFEBEE' }]}>
@@ -442,7 +490,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
                   color={answeredCorrectly ? '#4CAF50' : '#F44336'} 
                 />
                 <Text style={[styles.explanationTitle, { color: answeredCorrectly ? '#2E7D32' : '#C62828' }]}>
-                  {answeredCorrectly ? 'Correct!' : 'Incorrect!'}
+                  {answeredCorrectly ? 'Правилен отговор!' : 'Грешен отговор!'}
                 </Text>
               </View>
               <Text style={styles.explanationText}>
@@ -474,7 +522,7 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
     <View style={[styles.container, { backgroundColor: themeToUse.colors?.background }]}>
       <Appbar.Header style={{ backgroundColor: themeToUse.colors?.primary }}>
         <Appbar.BackAction onPress={() => navigation.goBack()} color="#fff" />
-        <Appbar.Content title={`Quiz: ${topic}`} color="#fff" />
+        <Appbar.Content title={`Тест: ${topic}`} color="#fff" />
       </Appbar.Header>
       
       <ScrollView contentContainerStyle={styles.scrollContent} >
@@ -551,7 +599,10 @@ const styles = StyleSheet.create({
     fontSize: 20,
     marginBottom: 24,
   },
-  optionContainer: {
+  optionsContainer: {
+    marginBottom: 24,
+  },
+  optionButton: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
@@ -560,12 +611,6 @@ const styles = StyleSheet.create({
   },
   selectedOption: {
     backgroundColor: 'rgba(0, 122, 255, 0.1)',
-  },
-  correctOption: {
-    backgroundColor: 'rgba(76, 175, 80, 0.1)',
-  },
-  incorrectOption: {
-    backgroundColor: 'rgba(244, 67, 54, 0.1)',
   },
   optionText: {
     flex: 1,
@@ -592,14 +637,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
   },
-  buttonContainer: {
+  submitButton: {
     marginTop: 24,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  button: {
-    flex: 1,
-    marginHorizontal: 8,
+    width: '100%',
   },
   scoreDisplay: {
     alignItems: 'center',
@@ -682,5 +722,11 @@ const styles = StyleSheet.create({
     textShadowColor: 'rgba(0, 0, 0, 0.75)',
     textShadowOffset: { width: 1, height: 1 },
     textShadowRadius: 2,
+  },
+  correctOption: {
+    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+  },
+  incorrectOption: {
+    backgroundColor: 'rgba(244, 67, 54, 0.1)',
   },
 }); 

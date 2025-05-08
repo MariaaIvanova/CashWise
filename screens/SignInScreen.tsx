@@ -55,7 +55,7 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
       </View>
       
       <TextInput
-        placeholder="Email"
+        placeholder="Имейл"
         value={email}
         onChangeText={setEmail}
         style={styles.input}
@@ -66,7 +66,7 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
       />
       
       <TextInput
-        placeholder="Password"
+        placeholder="Парола"
         value={password}
         onChangeText={setPassword}
         secureTextEntry
@@ -82,7 +82,7 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
         onPress={handleSignIn}
         style={styles.signInButton}
       >
-        <Text style={styles.signInButtonText}>Log In</Text>
+        <Text style={styles.signInButtonText}>Вход</Text>
       </TouchableOpacity>
       
       {/* Sign Up Button */}
@@ -90,12 +90,12 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
         onPress={handleSignUp}
         style={styles.signUpButton}
       >
-        <Text style={styles.signUpButtonText}>Register</Text>
+        <Text style={styles.signUpButtonText}>Регистрация</Text>
       </TouchableOpacity>
       
       <View style={styles.dividerContainer}>
         <View style={styles.dividerLine} />
-        <Text style={styles.orText}>Or log in with</Text>
+        <Text style={styles.orText}>Или влезте с</Text>
         <View style={styles.dividerLine} />
       </View>
       

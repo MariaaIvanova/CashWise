@@ -1,12 +1,13 @@
-import React, { useState, ReactNode } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions, Image, Platform } from 'react-native';
-import { Surface, Text, IconButton, useTheme, Button, Switch, Divider, Chip, Portal, Modal, TextInput, Dialog, Avatar, FAB } from 'react-native-paper';
+import React, { useState, useEffect, ReactNode } from 'react';
+import { View, StyleSheet, ScrollView, Dimensions, Image, Platform, Alert } from 'react-native';
+import { Surface, Text, IconButton, useTheme, Button, Switch, Divider, Chip, Portal, Modal, TextInput, Dialog, Avatar, FAB, ActivityIndicator } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import CustomButton from '../components/CustomButton';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../AppNavigator';
 import BottomNavBar from '../components/BottomNavBar';
+import { auth, database, supabase } from '../supabase';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -45,37 +46,178 @@ interface UserData {
 
 export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const { colors } = useTheme();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
-  const [userData, setUserData] = useState({
-    name: 'Мария Иванова',
-    email: 'maria.ivanova@example.com',
-    age: 28,
-    interests: ['Инвестиции', 'Криптовалути', 'Фондов пазар'],
+  const [userData, setUserData] = useState<UserData>({
+    name: '',
+    email: '',
+    age: 0,
+    interests: [],
     socialLinks: {
-      facebook: 'maria.ivanova',
-      linkedin: 'maria-ivanova'
+      facebook: '',
+      linkedin: ''
     },
-    level: 12,
-    xp: 2450,
-    streak: 22,
-    completedLessons: 45,
-    completedQuizzes: 12,
-    achievements: [
-      { id: 1, title: 'Първи стъпки', description: 'Завършете първия урок', completed: true },
-      { id: 2, title: 'Ученик', description: 'Достигнете ниво 5', completed: true },
-      { id: 3, title: 'Напреднал', description: 'Достигнете ниво 10', completed: true },
-      { id: 4, title: 'Експерт', description: 'Достигнете ниво 20', completed: false },
-      { id: 5, title: 'Магистър', description: 'Завършете всички уроци', completed: false },
-    ]
+    level: 0,
+    xp: 0,
+    streak: 0,
+    completedLessons: 0,
+    completedQuizzes: 0,
+    achievements: []
   });
   const [editField, setEditField] = useState('');
   const [editValue, setEditValue] = useState('');
   const [showEditDialog, setShowEditDialog] = useState(false);
 
-  const handleEdit = (field: keyof UserData, value: string | number | string[] | SocialLinks): void => {
+  useEffect(() => {
+    checkAuthAndLoadData();
+  }, []);
+
+  const checkAuthAndLoadData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      console.log('Checking auth session...');
+      
+      // Check for active session using supabase client directly
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      console.log('Session check result:', {
+        hasSession: !!session,
+        sessionError: sessionError ? sessionError.message : null,
+        sessionData: session ? {
+          user: session.user?.id,
+          expires_at: session.expires_at,
+          access_token: !!session.access_token
+        } : null
+      });
+      
+      if (sessionError) {
+        console.error('Session error:', sessionError);
+        throw sessionError;
+      }
+
+      if (!session) {
+        console.log('No session found, redirecting to SignIn');
+        navigation.replace('SignIn');
+        return;
+      }
+
+      console.log('Session found, loading user data...');
+      // Session exists, load user data
+      await loadUserData();
+    } catch (err) {
+      console.error('Auth check error details:', {
+        error: err,
+        message: err instanceof Error ? err.message : 'Unknown error',
+        stack: err instanceof Error ? err.stack : undefined
+      });
+      
+      if (err instanceof Error && err.message.includes('auth session is missing')) {
+        console.log('Auth session missing error, redirecting to SignIn');
+        navigation.replace('SignIn');
+      } else {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+        Alert.alert('Error', 'Failed to load profile data');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadUserData = async () => {
+    try {
+      console.log('Getting current user...');
+      // Get current user
+      const { user, error: userError } = await auth.getCurrentUser();
+      
+      console.log('Current user check result:', {
+        hasUser: !!user,
+        userId: user?.id,
+        userError: userError ? userError.message : null
+      });
+
+      if (userError) {
+        console.error('User error:', userError);
+        throw userError;
+      }
+      
+      if (!user) {
+        console.log('No user found, redirecting to SignIn');
+        navigation.replace('SignIn');
+        return;
+      }
+
+      console.log('Fetching profile data...');
+      // Fetch profile data
+      const { data: profile, error: profileError } = await database.getProfile(user.id);
+      console.log('Profile fetch result:', {
+        hasProfile: !!profile,
+        profileError: profileError ? profileError.message : null
+      });
+      if (profileError) throw profileError;
+
+      // Fetch user settings
+      const { data: settings, error: settingsError } = await database.getUserSettings(user.id);
+      if (settingsError) throw settingsError;
+
+      // Fetch user achievements
+      const { data: achievements, error: achievementsError } = await database.getUserAchievements(user.id);
+      if (achievementsError) throw achievementsError;
+
+      // Fetch user progress
+      const { data: progress, error: progressError } = await database.getUserProgress(user.id);
+      if (progressError) throw progressError;
+
+      // Update state with fetched data
+      setUserData({
+        name: profile?.name || '',
+        email: user.email || '',
+        age: profile?.age || 0,
+        interests: profile?.interests || [],
+        socialLinks: profile?.social_links || { facebook: '', linkedin: '' },
+        level: progress?.level || 0,
+        xp: progress?.xp || 0,
+        streak: progress?.streak || 0,
+        completedLessons: progress?.completed_lessons || 0,
+        completedQuizzes: progress?.completed_quizzes || 0,
+        achievements: achievements?.map(a => ({
+          id: a.achievements.id,
+          title: a.achievements.title,
+          description: a.achievements.description,
+          completed: a.completed
+        })) || []
+      });
+
+      // Update settings
+      if (settings) {
+        setNotificationsEnabled(settings.notifications_enabled);
+        setSoundEnabled(settings.sound_enabled);
+        setDarkMode(settings.dark_mode);
+      }
+
+    } catch (err) {
+      console.error('Load data error details:', {
+        error: err,
+        message: err instanceof Error ? err.message : 'Unknown error',
+        stack: err instanceof Error ? err.stack : undefined
+      });
+      
+      if (err instanceof Error && err.message.includes('auth session is missing')) {
+        console.log('Auth session missing in loadUserData, redirecting to SignIn');
+        navigation.replace('SignIn');
+      } else {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+        Alert.alert('Error', 'Failed to load profile data');
+      }
+    }
+  };
+
+  const handleEdit = async (field: keyof UserData, value: string | number | string[] | SocialLinks): Promise<void> => {
     if (!isEditing) return;
     
     setEditField(field);
@@ -91,34 +233,78 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
     setShowEditDialog(true);
   };
 
-  const handleSave = (): void => {
+  const handleSave = async (): Promise<void> => {
     if (!isEditing || !editField) return;
 
-    let newValue: string | string[] | SocialLinks | number = editValue;
-    if (editField === 'interests') {
-      newValue = editValue.split(',').map((item: string) => item.trim());
-    } else if (editField === 'socialLinks') {
-      const lines = editValue.split('\n');
-      const socialLinks: SocialLinks = {
-        facebook: '',
-        linkedin: ''
-      };
-      lines.forEach((line: string) => {
-        const [key, value] = line.split(':').map((item: string) => item.trim());
-        if (key && value) {
-          socialLinks[key] = value;
-        }
-      });
-      newValue = socialLinks;
-    } else if (editField === 'age') {
-      newValue = parseInt(editValue, 10);
-    }
+    try {
+      const { user, error: userError } = await auth.getCurrentUser();
+      if (userError) throw userError;
+      if (!user) throw new Error('No user found');
 
-    setUserData((prev: UserData) => ({
-      ...prev,
-      [editField]: newValue
-    }));
-    setShowEditDialog(false);
+      let newValue: string | string[] | SocialLinks | number = editValue;
+      if (editField === 'interests') {
+        newValue = editValue.split(',').map((item: string) => item.trim());
+      } else if (editField === 'socialLinks') {
+        const lines = editValue.split('\n');
+        const socialLinks: SocialLinks = {
+          facebook: '',
+          linkedin: ''
+        };
+        lines.forEach((line: string) => {
+          const [key, value] = line.split(':').map((item: string) => item.trim());
+          if (key && value) {
+            socialLinks[key] = value;
+          }
+        });
+        newValue = socialLinks;
+      } else if (editField === 'age') {
+        newValue = parseInt(editValue, 10);
+      }
+
+      // Update profile in database
+      const { error: updateError } = await database.updateProfile(user.id, {
+        [editField]: newValue
+      });
+      if (updateError) throw updateError;
+
+      // Update local state
+      setUserData((prev: UserData) => ({
+        ...prev,
+        [editField]: newValue
+      }));
+      setShowEditDialog(false);
+    } catch (err) {
+      Alert.alert('Error', 'Failed to update profile');
+    }
+  };
+
+  const handleSettingsChange = async (setting: string, value: boolean) => {
+    try {
+      const { user, error: userError } = await auth.getCurrentUser();
+      if (userError) throw userError;
+      if (!user) throw new Error('No user found');
+
+      // Update settings in database
+      const { error: updateError } = await database.updateUserSettings(user.id, {
+        [setting]: value
+      });
+      if (updateError) throw updateError;
+
+      // Update local state
+      switch (setting) {
+        case 'notifications_enabled':
+          setNotificationsEnabled(value);
+          break;
+        case 'sound_enabled':
+          setSoundEnabled(value);
+          break;
+        case 'dark_mode':
+          setDarkMode(value);
+          break;
+      }
+    } catch (err) {
+      Alert.alert('Error', 'Failed to update settings');
+    }
   };
 
   const cardStyle = StyleSheet.create({
@@ -349,7 +535,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           </Text>
           <Switch
             value={notificationsEnabled}
-            onValueChange={setNotificationsEnabled}
+            onValueChange={(value) => handleSettingsChange('notifications_enabled', value)}
             color="#8A97FF"
           />
         </View>
@@ -361,7 +547,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           </Text>
           <Switch
             value={soundEnabled}
-            onValueChange={setSoundEnabled}
+            onValueChange={(value) => handleSettingsChange('sound_enabled', value)}
             color="#8A97FF"
           />
         </View>
@@ -373,13 +559,39 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           </Text>
           <Switch
             value={darkMode}
-            onValueChange={setDarkMode}
+            onValueChange={(value) => handleSettingsChange('dark_mode', value)}
             color="#8A97FF"
           />
         </View>
       </View>
     </Surface>
   );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color="#8A97FF" />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error}</Text>
+        <Button mode="contained" onPress={checkAuthAndLoadData} style={{ marginTop: 16 }}>
+          Retry
+        </Button>
+        <Button 
+          mode="outlined" 
+          onPress={() => navigation.replace('SignIn')} 
+          style={{ marginTop: 8 }}
+        >
+          Go to Sign In
+        </Button>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: '#F5F5F5' }]}>
@@ -403,25 +615,18 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           onDismiss={() => setShowEditDialog(false)}
           style={dialogStyle}
         >
-          <Dialog.Title>
-            <Text>Редактиране</Text>
-          </Dialog.Title>
+          <Dialog.Title>Редактиране</Dialog.Title>
           <Dialog.Content>
             <TextInput
               value={editValue}
               onChangeText={setEditValue}
-              mode="outlined"
-              multiline={editField === 'socialLinks'}
-              style={{ backgroundColor: '#FFFFFF' }}
+              multiline={editField === 'interests' || editField === 'socialLinks'}
+              numberOfLines={editField === 'interests' || editField === 'socialLinks' ? 4 : 1}
             />
           </Dialog.Content>
           <Dialog.Actions>
-            <Button onPress={() => setShowEditDialog(false)}>
-              <Text>Отказ</Text>
-            </Button>
-            <Button onPress={handleSave}>
-              <Text>Запази</Text>
-            </Button>
+            <Button onPress={() => setShowEditDialog(false)}>Отказ</Button>
+            <Button onPress={handleSave}>Запази</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
@@ -556,5 +761,14 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     justifyContent: 'space-between',
     gap: 8,
+  },
+  centered: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    color: 'red',
+    textAlign: 'center',
+    marginHorizontal: 20,
   },
 }); 

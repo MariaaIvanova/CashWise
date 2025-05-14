@@ -10,14 +10,18 @@ import { RouteProp } from '@react-navigation/native';
 
 interface QuizQuestion {
   question: string;
-  options: string[];
-  correctAnswer: number | number[];
-  explanation: string;
-  isMultipleChoice?: boolean;
+  type: 'single' | 'multiple' | 'matching';
+  options?: string[];
+  correctAnswers?: number[];
+  pairs?: Array<{
+    situation: string;
+    answer: string;
+  }>;
+  explanation?: string;
 }
 
 interface RootStackParamList extends ParamListBase {
-  Quiz: { topic: string };
+  Quiz: { lessonId: string };
   Home: undefined;
 }
 
@@ -26,147 +30,221 @@ type QuizScreenProps = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Quiz'>;
 };
 
+// Quiz data for Lesson 1: Credits
+const creditQuizQuestions: QuizQuestion[] = [
+  {
+    question: 'Каква е основната цел на потребителския кредит?',
+    type: 'single',
+    options: [
+      'Закупуване на жилище',
+      'Покупка на дребни стоки като техника',
+      'Инвестиране на фондовата борса'
+    ],
+    correctAnswers: [1],
+    explanation: 'Потребителските кредити са предназначени за покупка на дребни стоки като техника, мебели и други потребителски стоки.'
+  },
+  {
+    question: 'Ако не можеш да изплатиш кредита си навреме…',
+    type: 'single',
+    options: [
+      'Ще заведат дело срещу теб',
+      'Ще намалят лихвата',
+      'Ще започнат наказателни лихви'
+    ],
+    correctAnswers: [2],
+    explanation: 'При забавяне на плащанията по кредита, банката започва да начислява наказателни лихви, които значително увеличават общата сума за погасяване.'
+  },
+  {
+    question: 'Кои от изброените характеристики се отнасят за бързите кредити?',
+    type: 'multiple',
+    options: [
+      'Лесно достъпни',
+      'Подходящи само в извънредни случаи',
+      'Изискват ипотека на жилище',
+      'Обикновено с висока лихва',
+      'Погасяват се за 20–30 години'
+    ],
+    correctAnswers: [0, 1, 3],
+    explanation: 'Бързите кредити са лесно достъпни, подходящи само за спешни случаи и обикновено имат висока лихва. Те не изискват ипотека и имат кратък срок на погасяване.'
+  },
+  {
+    question: 'Кой от изброените кредити обикновено изисква най-дълъг срок на погасяване?',
+    type: 'single',
+    options: [
+      'Потребителски',
+      'Бърз',
+      'Ипотечен'
+    ],
+    correctAnswers: [2],
+    explanation: 'Ипотечните кредити обикновено имат най-дълъг срок на погасяване, тъй като са за големи суми и закупуване на недвижим имот.'
+  },
+  {
+    question: 'Свържете термините с тяхното обяснение:',
+    type: 'matching',
+    pairs: [
+      {
+        situation: 'Сума, която се изплаща допълнително към заема',
+        answer: 'Лихва'
+      },
+      {
+        situation: 'Част от кредита, която се плаща всеки месец',
+        answer: 'Вноска'
+      },
+      {
+        situation: 'Време, в което не се изисква плащане',
+        answer: 'Гратисен период'
+      }
+    ]
+  }
+];
+
+// Quiz data for Lesson 2: Investments
+const investmentQuizQuestions: QuizQuestion[] = [
+  {
+    question: 'Кои от следните твърдения са верни за инвестирането в имоти?',
+    type: 'multiple',
+    options: [
+      'Изисква по-голям първоначален капитал',
+      'Може да носи доход чрез наем',
+      'Подходящо е само за краткосрочни вложения',
+      'Позволява печалба при препродажба',
+      'Носи по-висок риск от облигации, но и по-малък от акциите'
+    ],
+    correctAnswers: [0, 1, 3]
+  },
+  {
+    question: 'Какъв е основният риск при инвестирането в акции?',
+    type: 'single',
+    options: [
+      'Да не получиш лихва',
+      'Да загубиш пари, ако компанията се провали',
+      'Да не намериш купувач за имота'
+    ],
+    correctAnswers: [1]
+  },
+  {
+    question: 'Кое твърдение е вярно за облигациите?',
+    type: 'single',
+    options: [
+      'Генерират голяма печалба, но с висок риск',
+      'Те са по-сигурни, но носят по-малка печалба',
+      'Купуват се само от банки'
+    ],
+    correctAnswers: [1]
+  },
+  {
+    question: 'Какво може да се случи, ако компанията, в която си инвестирал чрез акции, започне да губи пари?',
+    type: 'single',
+    options: [
+      'Ще получиш фиксирана лихва, независимо от резултатите',
+      'Може да загубиш част или цялата си инвестиция',
+      'Ще получиш по-високи дивиденти'
+    ],
+    correctAnswers: [1]
+  },
+  {
+    question: 'Какъв е основният източник на доход при инвестиция в имоти?',
+    type: 'single',
+    options: [
+      'От дивиденти',
+      'От наеми или препродажба',
+      'От държавна субсидия'
+    ],
+    correctAnswers: [1]
+  },
+  {
+    question: 'Коя инвестиция обикновено се смята за най-сигурна?',
+    type: 'single',
+    options: [
+      'Акции',
+      'Облигации',
+      'Имоти'
+    ],
+    correctAnswers: [1]
+  },
+  {
+    question: 'Коя от следните инвестиции гарантира висока и сигурна печалба?',
+    type: 'single',
+    options: [
+      'Акции на известна компания',
+      'Облигации с гарантирана лихва',
+      'Нито една – всяка инвестиция носи риск'
+    ],
+    correctAnswers: [2]
+  },
+  {
+    question: 'Свържете ситуациите с правилния вид инвестиция:',
+    type: 'matching',
+    pairs: [
+      {
+        situation: 'Иван купува акции на технологична фирма и следи дали ще се покачат цените.',
+        answer: 'Акции'
+      },
+      {
+        situation: 'Мария дава пари на държавата и получава фиксирана лихва всяка година.',
+        answer: 'Облигации'
+      },
+      {
+        situation: 'Петър купува апартамент и го отдава под наем.',
+        answer: 'Имоти'
+      }
+    ]
+  }
+];
+
 export default function QuizScreen({ route, navigation }: QuizScreenProps) {
-  // Safely extract parameters
-  const { topic = 'General Knowledge' } = route.params;
-  
-  // Use simplified useTheme hook
+  const { lessonId } = route.params;
   const { theme } = useTheme();
   const themeToUse = theme || THEME;
   
+  // Select quiz questions based on lessonId
+  const getQuizQuestions = () => {
+    switch (lessonId) {
+      case '1':
+        return creditQuizQuestions;
+      case '2':
+        return investmentQuizQuestions;
+      default:
+        return [];
+    }
+  };
+
+  // Get quiz title based on lessonId
+  const getQuizTitle = () => {
+    switch (lessonId) {
+      case '1':
+        return 'Тест: Кредити';
+      case '2':
+        return 'Тест: Инвестиции';
+      default:
+        return 'Тест';
+    }
+  };
+
+  const quizQuestions = getQuizQuestions();
+  const quizTitle = getQuizTitle();
+
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(0);
   const [selectedAnswer, setSelectedAnswer] = useState<number | null>(null);
   const [selectedAnswers, setSelectedAnswers] = useState<number[]>([]);
+  const [matchingAnswers, setMatchingAnswers] = useState<{ [key: string]: string }>({});
   const [score, setScore] = useState<number>(0);
   const [showResult, setShowResult] = useState<boolean>(false);
   const [answeredCorrectly, setAnsweredCorrectly] = useState<boolean>(false);
   const [quizComplete, setQuizComplete] = useState<boolean>(false);
-  const [timeRemaining, setTimeRemaining] = useState<number>(30); // seconds per question
-  const [timeElapsed, setTimeElapsed] = useState<number>(0); // total time elapsed
-  const [timeRunOut, setTimeRunOut] = useState<boolean>(false);
+  const [timeRemaining, setTimeRemaining] = useState<number>(60); // More time for matching questions
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  
-  // Mock quiz data - would come from backend
-  const quizQuestions: QuizQuestion[] = [
-    {
-      question: 'Каква е основната цел на потребителския кредит?',
-      options: [
-        'Закупуване на жилище',
-        'Покупка на дребни стоки като техника',
-        'Инвестиране на фондовата борса'
-      ],
-      correctAnswer: 1,
-      explanation: 'Потребителските кредити са предназначени за покупка на дребни стоки като техника, мебели и други потребителски стоки.'
-    },
-    {
-      question: 'Ако не можеш да изплатиш кредита си навреме…',
-      options: [
-        'Ще заведат дело срещу теб',
-        'Ще намалят лихвата',
-        'Ще започнат наказателни лихви'
-      ],
-      correctAnswer: 2,
-      explanation: 'При забавяне на плащанията по кредита, банката започва да начислява наказателни лихви, които значително увеличават общата сума за погасяване.'
-    },
-    {
-      question: 'Кои от изброените характеристики се отнасят за бързите кредити?',
-      options: [
-        'Лесно достъпни',
-        'Подходящи само в извънредни случаи',
-        'Изискват ипотека на жилище',
-        'Обикновено с висока лихва',
-        'Погасяват се за 20–30 години'
-      ],
-      correctAnswer: [0, 1, 3],
-      isMultipleChoice: true,
-      explanation: 'Бързите кредити са лесно достъпни, подходящи само за спешни случаи и обикновено имат висока лихва. Те не изискват ипотека и имат кратък срок на погасяване.'
-    },
-    {
-      question: 'Кой от изброените кредити обикновено изисква най-дълъг срок на погасяване?',
-      options: [
-        'Потребителски',
-        'Бърз',
-        'Ипотечен'
-      ],
-      correctAnswer: 2,
-      explanation: 'Ипотечните кредити обикновено имат най-дълъг срок на погасяване, тъй като са за големи суми и закупуване на недвижим имот.'
-    },
-    {
-      question: 'Свържете термините с тяхното обяснение:',
-      options: [
-        'Лихва - Сума, която се изплаща допълнително към заема',
-        'Вноска - Част от кредита, която се плаща всеки месец',
-        'Гратисен период - Време, в което не се изисква плащане'
-      ],
-      correctAnswer: [0, 1, 2],
-      isMultipleChoice: true,
-      explanation: 'Лихвата е допълнителната сума, която се плаща за използването на кредита. Вноската е редовното месечно плащане. Гратисният период е време, през което не се изисква плащане.'
-    },
-    {
-      question: 'Какъв е основният риск при бързите кредити?',
-      options: [
-        'Бавна процедура по одобрение',
-        'Висока лихва и риск от задлъжняване',
-        'Трудност при намиране на кредитори'
-      ],
-      correctAnswer: 1,
-      explanation: 'Основният риск при бързите кредити е високата лихва и възможността за задлъжняване поради бързото одобрение и по-малко строги изисквания.'
-    },
-    {
-      question: 'Кое от следните твърдения е вярно за потребителските кредити?',
-      options: [
-        'Изискват ипотека като обезпечение',
-        'Предназначени са за покупка на жилище',
-        'Обикновено са в размер до 10 000 лв.'
-      ],
-      correctAnswer: 2,
-      explanation: 'Потребителските кредити обикновено са за по-малки суми (до 10 000 лв.) и не изискват ипотека като обезпечение.'
-    }
-  ];
-  
+
   const currentQuestion = quizQuestions[currentQuestionIndex];
-  
-  // Timer effect for tracking time elapsed
+
   useEffect(() => {
-    // Don't start timer if quiz is already complete
     if (quizComplete) return;
-    
-    const timeElapsedTimer = setInterval(() => {
-      setTimeElapsed(prev => prev + 1);
-    }, 1000);
-    
-    return () => clearInterval(timeElapsedTimer);
-  }, [quizComplete]);
-  
-  // Timer effect for question time limit
-  useEffect(() => {
-    if (showResult || quizComplete) return;
     
     const timer = setInterval(() => {
       setTimeRemaining(prev => {
         if (prev <= 1) {
           clearInterval(timer);
-          // Show time run out animation
-          setTimeRunOut(true);
-          
-          // Fade in animation
-          Animated.sequence([
-            Animated.timing(fadeAnim, {
-              toValue: 1,
-              duration: 300,
-              useNativeDriver: true,
-            }),
-            Animated.delay(1000),
-            Animated.timing(fadeAnim, {
-              toValue: 0,
-              duration: 300,
-              useNativeDriver: true,
-            })
-          ]).start(() => {
-            // Mark as incorrect and move to next question
-            handleTimeUp();
-          });
-          
+          handleTimeUp();
           return 0;
         }
         return prev - 1;
@@ -174,32 +252,31 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
     }, 1000);
     
     return () => clearInterval(timer);
-  }, [currentQuestionIndex, showResult, quizComplete, fadeAnim]);
-  
-  // Reset timer when moving to next question
+  }, [currentQuestionIndex, showResult, quizComplete]);
+
   useEffect(() => {
-    setTimeRemaining(30);
+    // Reset timer based on question type
+    setTimeRemaining(currentQuestion.type === 'matching' ? 90 : 60);
   }, [currentQuestionIndex]);
-  
+
   const handleAnswerSubmit = () => {
-    // If no answer is selected and time ran out, treat it as incorrect
-    if ((selectedAnswer === null && !currentQuestion.isMultipleChoice) && timeRemaining <= 0) {
-      setAnsweredCorrectly(false);
-      setShowResult(true);
-      return;
-    }
-    
-    // If no answer is selected and timer hasn't run out, don't proceed
-    if ((selectedAnswer === null && !currentQuestion.isMultipleChoice) || 
-        (currentQuestion.isMultipleChoice && selectedAnswers.length === 0)) return;
-    
-    let isCorrect: boolean;
-    if (currentQuestion.isMultipleChoice) {
-      const correctAnswers = currentQuestion.correctAnswer as number[];
-      isCorrect = correctAnswers.length === selectedAnswers.length &&
-                 correctAnswers.every(answer => selectedAnswers.includes(answer));
-    } else {
-      isCorrect = selectedAnswer === currentQuestion.correctAnswer;
+    let isCorrect = false;
+
+    switch (currentQuestion.type) {
+      case 'single':
+        isCorrect = selectedAnswer === currentQuestion.correctAnswers?.[0];
+        break;
+      case 'multiple':
+        isCorrect = currentQuestion.correctAnswers?.length === selectedAnswers.length &&
+                   currentQuestion.correctAnswers.every(answer => selectedAnswers.includes(answer));
+        break;
+      case 'matching':
+        if (currentQuestion.pairs) {
+          isCorrect = currentQuestion.pairs.every(pair => 
+            matchingAnswers[pair.situation] === pair.answer
+          );
+        }
+        break;
     }
 
     if (isCorrect) {
@@ -210,13 +287,15 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
     }
     
     setShowResult(true);
+    // Automatically move to next question after a short delay
+    setTimeout(handleNextQuestion, 1500);
   };
-  
+
   const handleNextQuestion = () => {
     setSelectedAnswer(null);
     setSelectedAnswers([]);
+    setMatchingAnswers({});
     setShowResult(false);
-    setTimeRunOut(false);
     
     if (currentQuestionIndex < quizQuestions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
@@ -224,9 +303,9 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
       setQuizComplete(true);
     }
   };
-  
+
   const handleSelectAnswer = (index: number) => {
-    if (currentQuestion.isMultipleChoice) {
+    if (currentQuestion.type === 'multiple') {
       setSelectedAnswers(prev => {
         if (prev.includes(index)) {
           return prev.filter(i => i !== index);
@@ -238,495 +317,283 @@ export default function QuizScreen({ route, navigation }: QuizScreenProps) {
       setSelectedAnswer(index);
     }
   };
-  
-  const handleSubmitAnswer = () => {
-    handleAnswerSubmit();
-    handleNextQuestion();
+
+  const handleMatchingAnswer = (situation: string, answer: string) => {
+    setMatchingAnswers(prev => ({
+      ...prev,
+      [situation]: answer
+    }));
   };
-  
-  const formatTime = (seconds: number): string => {
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+
+  const handleTimeUp = () => {
+    setAnsweredCorrectly(false);
+    setShowResult(true);
+    setTimeout(handleNextQuestion, 1500);
   };
-  
-  const renderQuizCompletion = () => {
-    const earnedXP = score * 25; // XP earned depends on score
-    const passedPercent = 70; // Consider 70% correct answers as passing score
-    const scorePercent = (score / quizQuestions.length) * 100;
-    const passed = scorePercent >= passedPercent;
-    
+
+  const renderQuizCompletion = () => (
+    <View style={styles.completionContainer}>
+      <Title style={styles.completionTitle}>Тест завършен!</Title>
+      <Paragraph style={styles.completionScore}>
+        Резултат: {score} от {quizQuestions.length} точки
+      </Paragraph>
+      <Button
+        mode="contained"
+        onPress={() => navigation.navigate('Home')}
+        style={styles.completionButton}
+      >
+        Към началото
+      </Button>
+    </View>
+  );
+
+  const renderMatchingQuestion = () => {
+    if (!currentQuestion.pairs) return null;
+
     return (
-      <View style={[styles.questionContainer, { backgroundColor: '#efefef' }]}>
-        <Surface style={[styles.questionCard, { backgroundColor: '#efefef', paddingVertical: 24 }]} elevation={0}>
-          <View style={styles.completionTitleContainer}>
-            <MaterialCommunityIcons 
-              name={passed ? "trophy" : "school"} 
-              size={40} 
-              color={passed ? "#FFD700" : themeToUse.colors?.primary} 
-            />
-            <Title style={[styles.completionTitleText, { color: '#000', textAlign: 'center', marginLeft: 12 }]}>
-              Тестът завършен!
-            </Title>
+      <View style={styles.matchingContainer}>
+        {currentQuestion.pairs.map((pair, index) => (
+          <View key={index} style={styles.matchingPair}>
+            <Text style={styles.matchingSituation}>{pair.situation}</Text>
+            <View style={styles.matchingAnswers}>
+              {['Акции', 'Облигации', 'Имоти'].map((answer, answerIndex) => (
+                <TouchableOpacity
+                  key={answerIndex}
+                  style={[
+                    styles.matchingButton,
+                    matchingAnswers[pair.situation] === answer && styles.matchingButtonSelected
+                  ]}
+                  onPress={() => handleMatchingAnswer(pair.situation, answer)}
+                >
+                  <Text style={[
+                    styles.matchingButtonText,
+                    matchingAnswers[pair.situation] === answer && styles.matchingButtonTextSelected
+                  ]}>
+                    {answer}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
-          
-          <View style={styles.scoreDisplay}>
-            <View style={[styles.scoreCircle, { borderWidth: 4, borderColor: passed ? '#4CAF50' : '#F44336' }]}>
-              <Text style={[styles.scoreCircleText, { color: passed ? '#4CAF50' : '#F44336' }]}>
-                {scorePercent.toFixed(0)}%
-              </Text>
-            </View>
-            <Text style={{ color: '#000', fontSize: 18, textAlign: 'center', marginTop: 12, fontWeight: '500' }}>
-              {score} от {quizQuestions.length} правилни отговора
-            </Text>
-          </View>
-          
-          <View style={styles.resultDetailsContainer}>
-            <View style={[styles.resultDetailItem, { backgroundColor: '#ffffff' }]}>
-              <MaterialCommunityIcons name="star" size={28} color="#FFD700" />
-              <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>{earnedXP} точки спечелени</Text>
-            </View>
-            
-            <View style={[styles.resultDetailItem, { backgroundColor: '#ffffff' }]}>
-              <MaterialCommunityIcons name="clock-outline" size={28} color="#000" />
-              <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>{formatTime(timeElapsed)}</Text>
-            </View>
-            
-            {score === quizQuestions.length && (
-              <View style={[styles.resultDetailItem, { backgroundColor: '#ffffff' }]}>
-                <MaterialCommunityIcons name="medal" size={28} color="#FF6F00" />
-                <Text style={{ color: '#000', marginLeft: 12, fontSize: 16, fontWeight: '500' }}>Значка "Финансов експерт"</Text>
-              </View>
-            )}
-          </View>
-          
-          {passed ? (
-            <View style={[styles.feedbackContainer, { backgroundColor: '#E8F5E9' }]}>
-              <View style={styles.explanationHeader}>
-                <MaterialCommunityIcons 
-                  name="check-circle" 
-                  size={28} 
-                  color="#4CAF50" 
-                />
-                <Text style={{ color: '#2E7D32', fontSize: 20, fontWeight: 'bold', marginLeft: 12 }}>
-                  Поздравления!
-                </Text>
-              </View>
-              <Text style={{ color: '#2E7D32', marginTop: 12, fontSize: 16, lineHeight: 22 }}>
-                Успешно преминахте този тест. Отлична работа с вашите финансови познания!
-              </Text>
-            </View>
-          ) : (
-            <View style={[styles.feedbackContainer, { backgroundColor: '#FFEBEE' }]}>
-              <View style={styles.explanationHeader}>
-                <MaterialCommunityIcons 
-                  name="alert-circle" 
-                  size={28} 
-                  color="#F44336" 
-                />
-                <Text style={{ color: '#C62828', fontSize: 20, fontWeight: 'bold', marginLeft: 12 }}>
-                  Опитайте отново!
-                </Text>
-              </View>
-              <Text style={{ color: '#C62828', marginTop: 12, fontSize: 16, lineHeight: 22 }}>
-                Трябва да постигнете поне {passedPercent}% за да преминете теста. Продължете да учите и ще успеете!
-              </Text>
-            </View>
-          )}
-          
-          <View style={styles.completionButtonContainer}>
-            <Button 
-              mode="contained" 
-              onPress={() => {
-                setCurrentQuestionIndex(0);
-                setScore(0);
-                setQuizComplete(false);
-                setShowResult(false);
-                setSelectedAnswer(null);
-                setSelectedAnswers([]);
-                setTimeElapsed(0);
-                setTimeRemaining(30);
-              }}
-              style={[styles.completionButton, { marginBottom: 12 }]}
-              contentStyle={styles.buttonContent}
-              labelStyle={styles.buttonLabel}
-              color={themeToUse.colors?.primary}
-            >
-              Опитайте отново
-            </Button>
-            <Button 
-              mode="outlined" 
-              onPress={() => navigation.goBack()}
-              style={styles.completionButton}
-              contentStyle={styles.buttonContent}
-              labelStyle={styles.buttonLabel}
-              color={themeToUse.colors?.primary}
-            >
-              Назад към урока
-            </Button>
-          </View>
-        </Surface>
+        ))}
       </View>
     );
   };
-  
-  const renderQuestion = () => {
-    return (
-      <View style={[styles.questionContainer, { backgroundColor: '#efefef' }]}>
-        <View style={styles.progressContainer}>
-          <View style={styles.progressInfo}>
-            <Text style={[styles.questionCounter, { color: '#000' }]}>
-              Въпрос {currentQuestionIndex + 1}/{quizQuestions.length}
-            </Text>
-            <View style={styles.timerContainer}>
-              <MaterialCommunityIcons 
-                name="clock-outline" 
-                size={20} 
-                color={timeRemaining < 10 ? '#F44336' : '#000'} 
-              />
-              <Text 
-                style={[
-                  styles.timerText, 
-                  { 
-                    color: timeRemaining < 10 ? '#F44336' : '#000',
-                    fontWeight: timeRemaining < 10 ? 'bold' : 'normal' 
-                  }
-                ]}
-              >
-                {timeRemaining}s
-              </Text>
-            </View>
-          </View>
+
+  const renderQuestion = () => (
+    <View style={styles.questionContainer}>
+      <View style={styles.progressContainer}>
+        <ProgressBar
+          progress={(currentQuestionIndex + 1) / quizQuestions.length}
+          color={themeToUse.colors.primary}
+          style={styles.progressBar}
+        />
+        <Text style={[styles.progressText, { color: '#000' }]}>
+          {currentQuestionIndex + 1}/{quizQuestions.length}
+        </Text>
+      </View>
+
+      <Card style={[styles.questionCard, { backgroundColor: '#fff' }]}>
+        <Card.Content>
+          <Title style={[styles.questionText, { color: '#000' }]}>{currentQuestion.question}</Title>
           
-          <View style={styles.progressBarWrapper}>
-            <ProgressBar
-              progress={(currentQuestionIndex) / quizQuestions.length}
-              color={themeToUse.colors?.primary}
-              style={styles.progressBar}
-            />
-            <View style={styles.percentageContainer}>
-              <Text style={styles.percentageText}>
-                {Math.round((currentQuestionIndex / quizQuestions.length) * 100)}%
-              </Text>
-            </View>
-          </View>
-        </View>
-        
-        <Surface style={[styles.questionCard, { backgroundColor: '#efefef' }]} elevation={0}>
-          <Title style={[styles.questionText, { color: '#000' }]}>
-            {currentQuestion.question}
-          </Title>
-          
-          <View style={styles.optionsContainer}>
-            {currentQuestion.options.map((option, index) => (
-              <TouchableOpacity
-                key={index}
-                style={[
-                  styles.optionButton,
-                  (currentQuestion.isMultipleChoice ? selectedAnswers.includes(index) : selectedAnswer === index) && 
-                  styles.selectedOption,
-                  showResult && index === currentQuestion.correctAnswer && styles.correctOption,
-                  showResult && 
-                  ((currentQuestion.isMultipleChoice ? selectedAnswers.includes(index) : selectedAnswer === index)) && 
-                  index !== currentQuestion.correctAnswer && 
-                  styles.incorrectOption
-                ]}
-                onPress={() => !showResult && handleSelectAnswer(index)}
-                activeOpacity={0.7}
-              >
-                <RadioButton
-                  value={index.toString()}
-                  status={
-                    currentQuestion.isMultipleChoice
-                      ? selectedAnswers.includes(index) ? 'checked' : 'unchecked'
-                      : selectedAnswer === index ? 'checked' : 'unchecked'
-                  }
-                  onPress={() => !showResult && handleSelectAnswer(index)}
-                  color={themeToUse.colors?.primary}
-                />
-                <Text style={[
-                  styles.optionText,
-                  showResult && index === currentQuestion.correctAnswer && { color: '#4CAF50', fontWeight: 'bold' },
-                  showResult && 
-                  ((currentQuestion.isMultipleChoice ? selectedAnswers.includes(index) : selectedAnswer === index)) && 
-                  index !== currentQuestion.correctAnswer && 
-                  { color: '#F44336' }
-                ]}>
-                  {option}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-          
-          {!showResult ? (
-            <Button
-              mode="contained"
-              onPress={handleAnswerSubmit}
-              style={styles.submitButton}
-              disabled={
-                currentQuestion.isMultipleChoice
-                  ? selectedAnswers.length === 0
-                  : selectedAnswer === null
+          {currentQuestion.type === 'matching' ? (
+            renderMatchingQuestion()
+          ) : (
+            <RadioButton.Group
+              onValueChange={(value) => handleSelectAnswer(Number(value))}
+              value={
+                currentQuestion.type === 'multiple'
+                  ? selectedAnswers[selectedAnswers.length - 1]?.toString() || ''
+                  : selectedAnswer?.toString() || ''
               }
             >
-              Провери отговора
-            </Button>
-          ) : (
-            <Button
-              mode="contained"
-              onPress={handleNextQuestion}
-              style={styles.submitButton}
-            >
-              {currentQuestionIndex === quizQuestions.length - 1 ? 'Завърши' : 'Следващ въпрос'}
-            </Button>
+              {currentQuestion.options?.map((option, index) => (
+                <TouchableOpacity
+                  key={index}
+                  onPress={() => handleSelectAnswer(index)}
+                  style={[styles.optionContainer, { backgroundColor: '#f5f5f5' }]}
+                >
+                  {currentQuestion.type === 'multiple' ? (
+                    <IconButton
+                      icon={selectedAnswers.includes(index) ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                      size={24}
+                      onPress={() => handleSelectAnswer(index)}
+                      iconColor={themeToUse.colors.primary}
+                    />
+                  ) : (
+                    <RadioButton 
+                      value={index.toString()} 
+                      color={themeToUse.colors.primary}
+                    />
+                  )}
+                  <Text style={[styles.optionText, { color: '#000' }]}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </RadioButton.Group>
           )}
+        </Card.Content>
+      </Card>
 
-          {showResult && (
-            <View style={[styles.explanationContainer, { backgroundColor: answeredCorrectly ? '#E8F5E9' : '#FFEBEE' }]}>
-              <View style={styles.explanationHeader}>
-                <MaterialCommunityIcons 
-                  name={answeredCorrectly ? 'check-circle' : 'close-circle'} 
-                  size={24} 
-                  color={answeredCorrectly ? '#4CAF50' : '#F44336'} 
-                />
-                <Text style={[styles.explanationTitle, { color: answeredCorrectly ? '#2E7D32' : '#C62828' }]}>
-                  {answeredCorrectly ? 'Правилен отговор!' : 'Грешен отговор!'}
-                </Text>
-              </View>
-              <Text style={styles.explanationText}>
-                {currentQuestion.explanation}
-              </Text>
-            </View>
-          )}
-        </Surface>
+      <View style={styles.timerContainer}>
+        <Text style={[styles.timerText, { color: '#000' }]}>
+          Оставащо време: {Math.floor(timeRemaining / 60)}:{(timeRemaining % 60).toString().padStart(2, '0')}
+        </Text>
       </View>
-    );
-  };
-  
-  // New handler for when time runs out
-  const handleTimeUp = () => {
-    // Mark current question as incorrect (no points awarded)
-    setAnsweredCorrectly(false);
-    
-    // Move to next question or complete quiz
-    if (currentQuestionIndex < quizQuestions.length - 1) {
-      setCurrentQuestionIndex(currentQuestionIndex + 1);
-      setTimeRunOut(false);
-      setSelectedAnswer(null);
-    } else {
-      setQuizComplete(true);
-    }
-  };
-  
+
+      {showResult && (
+        <View style={[
+          styles.resultContainer,
+          { backgroundColor: answeredCorrectly ? '#e8f5e9' : '#ffebee' }
+        ]}>
+          <Text style={[
+            styles.resultText,
+            { color: answeredCorrectly ? '#2e7d32' : '#c62828' }
+          ]}>
+            {answeredCorrectly ? 'Правилен отговор!' : 'Грешен отговор!'}
+          </Text>
+        </View>
+      )}
+
+      <Button
+        mode="contained"
+        onPress={handleAnswerSubmit}
+        style={[styles.submitButton, { backgroundColor: themeToUse.colors.primary }]}
+        disabled={
+          (currentQuestion.type === 'single' && selectedAnswer === null) ||
+          (currentQuestion.type === 'multiple' && selectedAnswers.length === 0) ||
+          (currentQuestion.type === 'matching' && 
+           !currentQuestion.pairs?.every(pair => matchingAnswers[pair.situation]))
+        }
+      >
+        Продължи
+      </Button>
+    </View>
+  );
+
+  const styles = StyleSheet.create({
+    questionContainer: {
+      flex: 1,
+      padding: 16,
+    },
+    progressContainer: {
+      marginBottom: 16,
+    },
+    progressBar: {
+      height: 8,
+      borderRadius: 4,
+    },
+    progressText: {
+      textAlign: 'center',
+      marginTop: 8,
+    },
+    questionCard: {
+      marginBottom: 16,
+    },
+    questionText: {
+      fontSize: 18,
+      marginBottom: 16,
+    },
+    optionContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      marginVertical: 8,
+      padding: 12,
+      borderRadius: 8,
+      backgroundColor: '#f5f5f5',
+    },
+    optionText: {
+      flex: 1,
+      marginLeft: 8,
+    },
+    timerContainer: {
+      alignItems: 'center',
+      marginVertical: 16,
+    },
+    timerText: {
+      fontSize: 16,
+    },
+    submitButton: {
+      marginTop: 16,
+    },
+    resultContainer: {
+      padding: 16,
+      borderRadius: 8,
+      marginVertical: 16,
+      alignItems: 'center',
+    },
+    resultText: {
+      fontSize: 16,
+      fontWeight: 'bold',
+    },
+    completionContainer: {
+      flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 16,
+      backgroundColor: '#fff',
+    },
+    completionTitle: {
+      fontSize: 24,
+      marginBottom: 16,
+      color: '#000',
+    },
+    completionScore: {
+      fontSize: 18,
+      marginBottom: 24,
+      color: '#000',
+    },
+    completionButton: {
+      width: '100%',
+    },
+    matchingContainer: {
+      marginTop: 16,
+    },
+    matchingPair: {
+      marginBottom: 24,
+    },
+    matchingSituation: {
+      fontSize: 16,
+      marginBottom: 8,
+      color: '#000',
+    },
+    matchingAnswers: {
+      flexDirection: 'row',
+      justifyContent: 'space-around',
+      flexWrap: 'wrap',
+      gap: 8,
+    },
+    matchingButton: {
+      paddingHorizontal: 16,
+      paddingVertical: 8,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: themeToUse.colors.primary,
+      backgroundColor: '#fff',
+    },
+    matchingButtonSelected: {
+      backgroundColor: themeToUse.colors.primary,
+    },
+    matchingButtonText: {
+      color: themeToUse.colors.primary,
+      fontWeight: '500',
+    },
+    matchingButtonTextSelected: {
+      color: '#fff',
+      fontWeight: '500',
+    },
+  });
+
   return (
-    <View style={[styles.container, { backgroundColor: themeToUse.colors?.background }]}>
-      <Appbar.Header style={{ backgroundColor: themeToUse.colors?.primary }}>
+    <View style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
+      <Appbar.Header style={{ backgroundColor: themeToUse.colors.primary }}>
         <Appbar.BackAction onPress={() => navigation.goBack()} color="#fff" />
-        <Appbar.Content title={`Тест: ${topic}`} color="#fff" />
+        <Appbar.Content title={quizTitle} color="#fff" titleStyle={{ color: '#fff' }} />
       </Appbar.Header>
       
-      <ScrollView contentContainerStyle={styles.scrollContent} >
+      <ScrollView style={{ flex: 1 }}>
         {quizComplete ? renderQuizCompletion() : renderQuestion()}
       </ScrollView>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  scrollContent: {
-    flexGrow: 1,
-  },
-  questionContainer: {
-    flex: 1,
-    padding: 16,
-  },
-  progressContainer: {
-    marginBottom: 16,
-  },
-  progressInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-  questionCounter: {
-    fontSize: 18,
-    fontWeight: 'bold',
-  },
-  timerContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  timerText: {
-    fontSize: 16,
-    marginLeft: 8,
-  },
-  progressBarWrapper: {
-    position: 'relative',
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    overflow: 'hidden',
-  },
-  progressBar: {
-    height: '100%',
-    borderRadius: 12,
-  },
-  percentageContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  percentageText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#ffffff',
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 0, height: 0 },
-    textShadowRadius: 2,
-  },
-  questionCard: {
-    marginVertical: 16,
-  },
-  questionText: {
-    fontSize: 20,
-    marginBottom: 24,
-  },
-  optionsContainer: {
-    marginBottom: 24,
-  },
-  optionButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-  },
-  selectedOption: {
-    backgroundColor: 'rgba(0, 122, 255, 0.1)',
-  },
-  optionText: {
-    flex: 1,
-    marginLeft: 8,
-    fontSize: 16,
-  },
-  explanationContainer: {
-    marginTop: 24,
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 24,
-  },
-  explanationHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  explanationTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginLeft: 8,
-  },
-  explanationText: {
-    fontSize: 16,
-    lineHeight: 24,
-  },
-  submitButton: {
-    marginTop: 24,
-    width: '100%',
-  },
-  scoreDisplay: {
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  scoreCircle: {
-    width: 100,
-    height: 100,
-    borderRadius: 50,
-    backgroundColor: '#E0E0E0',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 16,
-  },
-  scoreCircleText: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  resultDetailsContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-around',
-    marginBottom: 24,
-  },
-  resultDetailItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 12,
-    minWidth: '30%',
-  },
-  feedbackContainer: {
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 24,
-  },
-  completionTitleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 24,
-  },
-  completionTitleText: {
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-  completionButtonContainer: {
-    width: '100%',
-    paddingHorizontal: 16,
-  },
-  completionButton: {
-    width: '100%',
-    borderRadius: 12,
-  },
-  buttonContent: {
-    height: 52,
-  },
-  buttonLabel: {
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  timeRunOutOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(244, 67, 54, 0.9)',
-    zIndex: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderRadius: 12,
-  },
-  timeRunOutText: {
-    color: '#fff',
-    fontSize: 32,
-    fontWeight: 'bold',
-    marginTop: 16,
-    textShadowColor: 'rgba(0, 0, 0, 0.75)',
-    textShadowOffset: { width: 1, height: 1 },
-    textShadowRadius: 2,
-  },
-  correctOption: {
-    backgroundColor: 'rgba(76, 175, 80, 0.1)',
-  },
-  incorrectOption: {
-    backgroundColor: 'rgba(244, 67, 54, 0.1)',
-  },
-}); 

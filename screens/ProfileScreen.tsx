@@ -1,5 +1,5 @@
 import React, { useState, useEffect, ReactNode } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions, Image, Platform, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, Dimensions, Image, Platform, Alert, TouchableOpacity } from 'react-native';
 import { Surface, Text, IconButton, useTheme, Button, Switch, Divider, Chip, Portal, Modal, TextInput, Dialog, Avatar, FAB, ActivityIndicator } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -27,7 +27,23 @@ interface Achievement {
 interface SocialLinks {
   facebook: string;
   linkedin: string;
+  instagram: string;
   [key: string]: string;
+}
+
+interface Profile {
+  id: string;
+  name: string;
+  avatar_url: string | null;
+  age?: number;
+  interests?: string[];
+  social_links: { [key: string]: string };
+  xp: number;
+  streak: number;
+  completed_lessons: number;
+  completed_quizzes: number;
+  created_at: string;
+  updated_at: string;
 }
 
 interface UserData {
@@ -59,7 +75,8 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
     interests: [],
     socialLinks: {
       facebook: '',
-      linkedin: ''
+      linkedin: '',
+      instagram: ''
     },
     level: 0,
     xp: 0,
@@ -71,6 +88,8 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const [editField, setEditField] = useState('');
   const [editValue, setEditValue] = useState('');
   const [showEditDialog, setShowEditDialog] = useState(false);
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
   useEffect(() => {
     checkAuthAndLoadData();
@@ -132,13 +151,12 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const loadUserData = async () => {
     try {
       console.log('Getting current user...');
-      // Get current user
       const { user, error: userError } = await auth.getCurrentUser();
       
       console.log('Current user check result:', {
         hasUser: !!user,
         userId: user?.id,
-        userError: userError ? userError.message : null
+        userError: userError instanceof Error ? userError.message : null
       });
 
       if (userError) {
@@ -153,13 +171,37 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       }
 
       console.log('Fetching profile data...');
-      // Fetch profile data
       const { data: profile, error: profileError } = await database.getProfile(user.id);
       console.log('Profile fetch result:', {
         hasProfile: !!profile,
-        profileError: profileError ? profileError.message : null
+        profileError: profileError instanceof Error ? profileError.message : null
       });
       if (profileError) throw profileError;
+
+      // Cast profile to Profile type
+      const typedProfile = profile as Profile;
+
+      // Ensure social_links has the required properties
+      const socialLinks: SocialLinks = {
+        facebook: typedProfile?.social_links?.facebook || '',
+        linkedin: typedProfile?.social_links?.linkedin || '',
+        instagram: typedProfile?.social_links?.instagram || ''
+      };
+
+      // Update state with fetched data
+      setUserData({
+        name: typedProfile?.name || '',
+        email: user.email || '',
+        age: typedProfile?.age || 0,
+        interests: typedProfile?.interests || [],
+        socialLinks,
+        level: Math.floor((typedProfile?.xp || 0) / 1000),
+        xp: typedProfile?.xp || 0,
+        streak: typedProfile?.streak || 0,
+        completedLessons: typedProfile?.completed_lessons || 0,
+        completedQuizzes: typedProfile?.completed_quizzes || 0,
+        achievements: [] // This will be populated from achievements data
+      });
 
       // Fetch user settings
       const { data: settings, error: settingsError } = await database.getUserSettings(user.id);
@@ -172,26 +214,6 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       // Fetch user progress
       const { data: progress, error: progressError } = await database.getUserProgress(user.id);
       if (progressError) throw progressError;
-
-      // Update state with fetched data
-      setUserData({
-        name: profile?.name || '',
-        email: user.email || '',
-        age: profile?.age || 0,
-        interests: profile?.interests || [],
-        socialLinks: profile?.social_links || { facebook: '', linkedin: '' },
-        level: progress?.level || 0,
-        xp: progress?.xp || 0,
-        streak: progress?.streak || 0,
-        completedLessons: progress?.completed_lessons || 0,
-        completedQuizzes: progress?.completed_quizzes || 0,
-        achievements: achievements?.map(a => ({
-          id: a.achievements.id,
-          title: a.achievements.title,
-          description: a.achievements.description,
-          completed: a.completed
-        })) || []
-      });
 
       // Update settings
       if (settings) {
@@ -234,12 +256,23 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   };
 
   const handleSave = async (): Promise<void> => {
-    if (!isEditing || !editField) return;
-
     try {
       const { user, error: userError } = await auth.getCurrentUser();
       if (userError) throw userError;
       if (!user) throw new Error('No user found');
+
+      // If we're editing the name directly in the header
+      if (isEditing && editField === '') {
+        const { error: updateError } = await database.updateProfile(user.id, {
+          name: userData.name
+        });
+        if (updateError) throw updateError;
+        setIsEditing(false);
+        return;
+      }
+
+      // Handle other field edits
+      if (!isEditing || !editField) return;
 
       let newValue: string | string[] | SocialLinks | number = editValue;
       if (editField === 'interests') {
@@ -248,7 +281,8 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
         const lines = editValue.split('\n');
         const socialLinks: SocialLinks = {
           facebook: '',
-          linkedin: ''
+          linkedin: '',
+          instagram: ''
         };
         lines.forEach((line: string) => {
           const [key, value] = line.split(':').map((item: string) => item.trim());
@@ -274,6 +308,7 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       }));
       setShowEditDialog(false);
     } catch (err) {
+      console.error('Save error:', err);
       Alert.alert('Error', 'Failed to update profile');
     }
   };
@@ -304,6 +339,24 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       }
     } catch (err) {
       Alert.alert('Error', 'Failed to update settings');
+    }
+  };
+
+  const handleAvatarUpload = async () => {
+    try {
+      setUploadingAvatar(true);
+      // TODO: Implement image picker and upload
+      // For now, we'll just show an alert
+      Alert.alert(
+        'Upload Avatar',
+        'Avatar upload functionality will be implemented soon.',
+        [{ text: 'OK' }]
+      );
+    } catch (err) {
+      Alert.alert('Error', 'Failed to upload avatar');
+    } finally {
+      setUploadingAvatar(false);
+      setShowAvatarPicker(false);
     }
   };
 
@@ -350,15 +403,42 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const renderProfileHeader = () => (
     <Surface style={[styles.profileHeader, { backgroundColor: '#FFFFFF' }]}>
       <View style={styles.profileAvatarContainer}>
-        <Avatar.Icon
-          size={90}
-          icon="account"
-          style={{ backgroundColor: '#8A97FF' }}
-        />
+        <TouchableOpacity 
+          onPress={() => isEditing && setShowAvatarPicker(true)}
+          disabled={!isEditing || uploadingAvatar}
+        >
+          <Avatar.Icon
+            size={90}
+            icon="account"
+            style={{ backgroundColor: '#8A97FF' }}
+          />
+          {isEditing && !uploadingAvatar && (
+            <View style={styles.avatarEditOverlay}>
+              <MaterialCommunityIcons name="camera" size={24} color="#FFFFFF" />
+            </View>
+          )}
+          {uploadingAvatar && (
+            <View style={styles.avatarUploadingOverlay}>
+              <ActivityIndicator color="#FFFFFF" />
+            </View>
+          )}
+        </TouchableOpacity>
         <View style={styles.profileInfo}>
-          <Text style={[styles.profileName, { color: '#000000' }]}>
-            {userData.name}
-          </Text>
+          {isEditing ? (
+            <TextInput
+              value={userData.name}
+              onChangeText={(text) => setUserData(prev => ({ ...prev, name: text }))}
+              style={[styles.profileNameInput, { color: '#000000' }]}
+              placeholder="Enter your name"
+              placeholderTextColor="rgba(0, 0, 0, 0.4)"
+              onBlur={() => handleSave()}
+              onSubmitEditing={() => handleSave()}
+            />
+          ) : (
+            <Text style={[styles.profileName, { color: '#000000' }]}>
+              {userData.name || 'Add your name'}
+            </Text>
+          )}
           <Text style={[styles.profileEmail, { color: 'rgba(0, 0, 0, 0.6)' }]}>
             {userData.email}
           </Text>
@@ -367,7 +447,12 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           icon={isEditing ? 'check' : 'pencil'}
           iconColor="#8A97FF"
           size={24}
-          onPress={() => setIsEditing(!isEditing)}
+          onPress={() => {
+            if (isEditing) {
+              handleSave();
+            }
+            setIsEditing(!isEditing);
+          }}
         />
       </View>
     </Surface>
@@ -501,7 +586,14 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           <IconButton
             icon="pencil"
             size={20}
-            onPress={() => handleEdit('socialLinks', userData.socialLinks)}
+            onPress={() => {
+              // Format social links for editing
+              const formattedLinks = Object.entries(userData.socialLinks)
+                .map(([platform, username]) => `${platform}: ${username}`)
+                .join('\n');
+              setEditValue(formattedLinks);
+              handleEdit('socialLinks', userData.socialLinks);
+            }}
           />
         )}
       </View>
@@ -509,12 +601,12 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
         {Object.entries(userData.socialLinks).map(([platform, username]) => (
           <View key={platform} style={styles.socialLink}>
             <MaterialCommunityIcons
-              name={platform.toLowerCase()}
+              name={platform === 'instagram' ? 'instagram' : platform.toLowerCase()}
               size={24}
               color="#8A97FF"
             />
             <Text variant="bodyMedium" style={{ color: '#000000', marginLeft: 12, fontSize: 16 }}>
-              {username}
+              {username || `Добави ${platform} профил`}
             </Text>
           </View>
         ))}
@@ -770,5 +862,34 @@ const styles = StyleSheet.create({
     color: 'red',
     textAlign: 'center',
     marginHorizontal: 20,
+  },
+  avatarEditOverlay: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 45,
+    width: 30,
+    height: 30,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarUploadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    borderRadius: 45,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  profileNameInput: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    padding: 0,
+    margin: 0,
+    height: 32,
   },
 }); 

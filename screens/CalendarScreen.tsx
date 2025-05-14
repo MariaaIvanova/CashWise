@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions, Animated } from 'react-native';
-import { Text, IconButton, Surface, useTheme } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, Dimensions, Animated, ActivityIndicator } from 'react-native';
+import { Text, IconButton, Surface, useTheme, Button } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Calendar } from 'react-native-calendars';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../AppNavigator';
 import BottomNavBar from '../components/BottomNavBar';
+import { auth, database } from '../supabase';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -46,87 +47,54 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
   const colors = theme.colors;
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [streakAnimation] = useState<Animated.Value>(new Animated.Value(0));
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [learningData, setLearningData] = useState<LearningData>({
+    currentStreak: 0,
+    longestStreak: 0,
+    totalDays: 0,
+    markedDates: {}
+  });
   
   // Get today's date in YYYY-MM-DD format
   const today = new Date().toISOString().split('T')[0];
   
-  // Mock data - replace with real data from your backend
-  const mockLearningData: LearningData = {
-    currentStreak: 7,
-    longestStreak: 14,
-    totalDays: 25,
-    // Generate learning days data
-    markedDates: (() => {
-      const dates: MarkedDates = {};
-      // Add some past learning days (last 7 days)
-      for (let i = 7; i >= 0; i--) {
-        const date = new Date();
-        date.setDate(date.getDate() - i);
-        const dateString = date.toISOString().split('T')[0];
-        
-        // Special marking for today
-        if (dateString === today) {
-          dates[dateString] = {
-            marked: true,
-            selected: true,
-            selectedColor: colors.primary + '30',
-            dotColor: colors.primary,
-            customContainerStyle: {
-              borderWidth: 2,
-              borderColor: colors.primary,
-              borderRadius: 20,
-            },
-            customTextStyle: {
-              color: colors.primary,
-              fontWeight: 'bold',
-            }
-          };
-        } else {
-          // Regular learning days
-          dates[dateString] = {
-            marked: true,
-            dotColor: colors.primary,
-            customContainerStyle: {
-              borderRadius: 20,
-            },
-            customTextStyle: {
-              color: colors.onSurface,
-            }
-          };
-        }
-      }
-      
-      // Add some random past learning days
-      const pastDays = [8, 9, 11, 12, 15, 16, 18, 20];
-      pastDays.forEach(daysAgo => {
-        const date = new Date();
-        date.setDate(date.getDate() - daysAgo);
-        const dateString = date.toISOString().split('T')[0];
-        dates[dateString] = {
-          marked: true,
-          dotColor: colors.primary,
-          customContainerStyle: {
-            borderRadius: 20,
-          },
-          customTextStyle: {
-            color: colors.onSurface,
-          }
-        };
-      });
-      
-      return dates;
-    })()
-  };
-
   useEffect(() => {
-    // Animate the streak number on mount
-    Animated.spring(streakAnimation, {
-      toValue: 1,
-      tension: 50,
-      friction: 7,
-      useNativeDriver: true,
-    }).start();
+    loadLearningData();
   }, []);
+
+  const loadLearningData = async () => {
+    try {
+      setLoading(true);
+      setError(null);
+
+      const { user, error: userError } = await auth.getCurrentUser();
+      if (userError) throw userError;
+      if (!user) {
+        navigation.replace('SignIn');
+        return;
+      }
+
+      const { data, error: streakError } = await database.getStreakInfo(user.id);
+      if (streakError) throw streakError;
+
+      if (data) {
+        setLearningData(data);
+        // Animate the streak number
+        Animated.spring(streakAnimation, {
+          toValue: 1,
+          tension: 50,
+          friction: 7,
+          useNativeDriver: true,
+        }).start();
+      }
+    } catch (err) {
+      console.error('Error loading learning data:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load learning data');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const renderHeader = () => (
     <View style={[styles.headerContainer, { backgroundColor: '#efefef' }]}>
@@ -162,7 +130,7 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
           style={styles.fireIcon}
         />
         <Text style={[styles.streakNumber, { color: '#FFFFFF' }]}>
-          {mockLearningData.currentStreak}
+          {learningData.currentStreak}
         </Text>
         <Text style={[styles.streakLabel, { color: '#FFFFFF' }]}>
           Текуща серия
@@ -171,7 +139,7 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
       <View style={styles.statsRow}>
         <View style={styles.statItem}>
           <Text style={[styles.statNumber, { color: '#FFFFFF' }]}>
-            {mockLearningData.longestStreak}
+            {learningData.longestStreak}
           </Text>
           <Text style={[styles.statLabel, { color: '#FFFFFF' }]}>
             Най-дълга серия
@@ -180,7 +148,7 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
         <View style={styles.statDivider} />
         <View style={styles.statItem}>
           <Text style={[styles.statNumber, { color: '#FFFFFF' }]}>
-            {mockLearningData.totalDays}
+            {learningData.totalDays}
           </Text>
           <Text style={[styles.statLabel, { color: '#FFFFFF' }]}>
             Общо дни
@@ -209,6 +177,25 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
       </View>
     </View>
   );
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (error) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
+        <Button mode="contained" onPress={loadLearningData} style={{ marginTop: 16 }}>
+          Retry
+        </Button>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: '#efefef' }]}>
@@ -253,16 +240,16 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
             firstDay={1}
             markingType="custom"
             markedDates={{
-              ...mockLearningData.markedDates,
+              ...learningData.markedDates,
               [selectedDate]: selectedDate !== today ? {
-                ...(mockLearningData.markedDates[selectedDate] || {}),
+                ...(learningData.markedDates[selectedDate] || {}),
                 selected: true,
                 selectedColor: colors.primary,
                 customTextStyle: {
                   color: '#FFFFFF',
                   fontWeight: 'bold',
                 }
-              } : mockLearningData.markedDates[selectedDate]
+              } : learningData.markedDates[selectedDate]
             }}
             onDayPress={(day: { dateString: string }) => setSelectedDate(day.dateString)}
             enableSwipeMonths={true}
@@ -390,5 +377,15 @@ const styles = StyleSheet.create({
   },
   legendText: {
     fontSize: 12,
+  },
+  centered: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  errorText: {
+    fontSize: 16,
+    textAlign: 'center',
+    marginHorizontal: 20,
   },
 }); 

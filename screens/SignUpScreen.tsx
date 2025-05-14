@@ -108,12 +108,13 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       console.log('Creating profile record...');
       const { error: profileError } = await database.createProfile({
         id: data.user.id,
+        name: name,
         avatar_url: null,
         xp: 0,
         streak: 0,
         completed_lessons: 0,
         completed_quizzes: 0,
-        social_links: [],
+        social_links: { facebook: '', linkedin: '' },
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
@@ -121,38 +122,6 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       if (profileError) {
         console.error('Profile creation error:', profileError);
         throw profileError;
-      }
-
-      // Create initial user settings
-      console.log('Creating user settings...');
-      const { error: settingsError } = await database.updateUserSettings(data.user.id, {
-        user_id: data.user.id,
-        notifications_enabled: true,
-        sound_enabled: true,
-        dark_mode: false,
-        created_at: new Date().toISOString()
-      });
-
-      if (settingsError) {
-        console.error('Settings creation error:', settingsError);
-        throw settingsError;
-      }
-
-      // Create initial user progress
-      console.log('Creating user progress...');
-      const { error: progressError } = await database.updateUserProgress(data.user.id, {
-        user_id: data.user.id,
-        level: 1,
-        xp: 0,
-        streak: 0,
-        completed_lessons: 0,
-        completed_quizzes: 0,
-        created_at: new Date().toISOString()
-      });
-
-      if (progressError) {
-        console.error('Progress creation error:', progressError);
-        throw progressError;
       }
 
       // After successful sign-up and data creation, try to sign in automatically

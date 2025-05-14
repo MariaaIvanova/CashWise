@@ -11,13 +11,25 @@ import LeaderboardScreen from './screens/LeaderboardScreen';
 import FeedbackScreen from './screens/FeedbackScreen';
 import ProfileScreen from './screens/ProfileScreen';
 
+interface LessonRouteParams {
+  lessonId: string;
+  topic: string;
+  description: string;
+  topics: {
+    title: string;
+    content: string;
+    image?: string;
+    keyPoints?: string[];
+  }[];
+}
+
 // Define the root stack parameter list
 export type RootStackParamList = {
   Splash: undefined;
   SignIn: undefined;
   SignUp: undefined;
   Home: undefined;
-  Lesson: { lessonId: string };
+  Lesson: LessonRouteParams;
   Quiz: { lessonId: string };
   Calendar: undefined;
   Leaderboard: undefined;

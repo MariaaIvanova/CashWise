@@ -1,54 +1,352 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions } from 'react-native';
-import { Surface, Text, IconButton, useTheme, Button, Avatar } from 'react-native-paper';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, ScrollView, Dimensions, RefreshControl, TextInput, Platform, Animated } from 'react-native';
+import { Surface, Text, IconButton, useTheme, Button, Avatar, ActivityIndicator, Menu, Divider } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import BottomNavBar from '../components/BottomNavBar';
+import BottomNavigationBar from '../components/BottomNavigationBar';
+import { RootStackParamList } from '../AppNavigator';
+import { database, auth, supabase } from '../supabase';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
-
-type RootStackParamList = {
-  Leaderboard: undefined;
-};
+const PAGE_SIZE = 20; // Number of users to load per page
 
 type LeaderboardScreenProps = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'Leaderboard'>;
+  navigation: NativeStackNavigationProp<RootStackParamList>;
 };
 
-interface LeaderboardItem {
-  id: number;
-  name: string;
+interface Profile {
+  id: string;
+  name: string | null;
+  avatar_url: string | null;
   xp: number;
-  level: number;
   streak: number;
-  rank: string;
-  avatar: string;
-  isCurrentUser?: boolean;
+  completed_lessons: number;
+  completed_quizzes: number;
+  social_links: { [key: string]: string };
+  created_at: string;
+  updated_at: string;
 }
 
-export default function LeaderboardScreen({ navigation }: LeaderboardScreenProps) {
-  const { colors } = useTheme();
-  const [currentUserPosition, setCurrentUserPosition] = useState<number>(15);
+interface LeaderboardItem {
+  id: string;
+  name: string;
+  avatar: string;
+  xp: number;
+  streak: number;
+  completedLessons: number;
+  isCurrentUser: boolean;
+  level: number;
+  rank: string;
+}
 
-  // Mock data for the leaderboard
-  const leaderboardData: LeaderboardItem[] = [
-    { id: 1, name: 'Иван Петров', xp: 3500, level: 15, streak: 30, rank: 'Магистър', avatar: 'https://randomuser.me/api/portraits/men/1.jpg' },
-    { id: 2, name: 'Петър Иванов', xp: 3200, level: 14, streak: 25, rank: 'Експерт', avatar: 'https://randomuser.me/api/portraits/men/2.jpg' },
-    { id: 3, name: 'Мария Димитрова', xp: 3000, level: 13, streak: 20, rank: 'Напреднал', avatar: 'https://randomuser.me/api/portraits/women/1.jpg' },
-    { id: 4, name: 'Анна Николова', xp: 2800, level: 12, streak: 18, rank: 'Напреднал', avatar: 'https://randomuser.me/api/portraits/women/2.jpg' },
-    { id: 5, name: 'Георги Стефанов', xp: 2600, level: 11, streak: 15, rank: 'Напреднал', avatar: 'https://randomuser.me/api/portraits/men/3.jpg' },
-    { id: 6, name: 'Елена Попова', xp: 2400, level: 10, streak: 12, rank: 'Ученик', avatar: 'https://randomuser.me/api/portraits/women/3.jpg' },
-    { id: 7, name: 'Димитър Георгиев', xp: 2200, level: 9, streak: 10, rank: 'Ученик', avatar: 'https://randomuser.me/api/portraits/men/4.jpg' },
-    { id: 8, name: 'Светлана Петрова', xp: 2000, level: 8, streak: 8, rank: 'Ученик', avatar: 'https://randomuser.me/api/portraits/women/4.jpg' },
-    { id: 9, name: 'Александър Димитров', xp: 1800, level: 7, streak: 6, rank: 'Ученик', avatar: 'https://randomuser.me/api/portraits/men/5.jpg' },
-    { id: 10, name: 'Ивана Стефанова', xp: 1600, level: 6, streak: 5, rank: 'Ученик', avatar: 'https://randomuser.me/api/portraits/women/5.jpg' },
-    { id: 11, name: 'Мария Иванова', xp: 1400, level: 5, streak: 4, rank: 'Ученик', avatar: 'https://randomuser.me/api/portraits/women/17.jpg', isCurrentUser: true },
-  ];
+type SortOption = 'xp' | 'streak' | 'completed_lessons' | 'name';
+type TimeFilter = 'all' | 'weekly' | 'monthly';
+type TabKey = 'home' | 'leaderboard' | 'calendar' | 'profile';
+
+const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ navigation }) => {
+  const { colors } = useTheme();
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardItem[]>([]);
+  const [page, setPage] = useState(0);
+  const [hasMore, setHasMore] = useState(true);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<SortOption>('xp');
+  const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [showOnlyActive, setShowOnlyActive] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabKey>('leaderboard');
+  const [fadeAnim] = useState(new Animated.Value(0));
+
+  useEffect(() => {
+    loadLeaderboardData();
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !error) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [loading, error]);
+
+  const calculateRank = (xp: number): string => {
+    if (xp >= 10000) return 'Финансов Експерт';
+    if (xp >= 7500) return 'Инвестиционен Консултант';
+    if (xp >= 5000) return 'Финансов Анализатор';
+    if (xp >= 2500) return 'Напреднал';
+    return 'Начинаещ';
+  };
+
+  const loadLeaderboardData = async () => {
+    try {
+      console.log('Starting to fetch leaderboard data...');
+      const { user } = await auth.getCurrentUser();
+      if (!user) {
+        console.error('No user found');
+        return;
+      }
+      console.log('Current user:', user.id);
+
+      // Build the initial query
+      let query = supabase
+        .from('profiles')
+        .select('*');
+      console.log('Initial query built');
+
+      // Get total count first
+      const { data: countData, error: countError } = await supabase
+        .from('profiles')
+        .select('*', { count: 'exact', head: true });
+      if (countError) throw countError;
+      const totalCount = countData?.length || 0;
+      console.log('Total users count:', totalCount);
+
+      // Fetch profiles with pagination
+      const { data: profiles, error: profilesError } = await query
+        .range(0, 19) // Fetch first 20 profiles
+        .order(sortBy, { ascending: sortBy === 'name' });
+      
+      if (profilesError) throw profilesError;
+      console.log('Fetched profiles:', profiles?.length);
+      console.log('Sample profile:', profiles?.[0]);
+
+      if (!profiles) return;
+
+      // Transform profiles into leaderboard items with actual streaks
+      const leaderboardItems: LeaderboardItem[] = await Promise.all(profiles.map(async (profile) => {
+        console.log('\n=== Processing profile', profile.id, `(${profile.name}) ===`);
+        console.log('Profile data:', {
+          id: profile.id,
+          name: profile.name,
+          stored_streak: profile.streak,
+          xp: profile.xp,
+          completed_lessons: profile.completed_lessons
+        });
+        
+        // Get streak info using the same function as the rest of the app
+        console.log('Fetching streak info for profile', profile.id);
+        const { data: streakInfo, error: streakError } = await database.getStreakInfo(profile.id);
+        if (streakError) {
+          console.error('Error getting streak info for profile', profile.id, ':', streakError);
+        }
+        
+        console.log('Streak info response:', {
+          currentStreak: streakInfo?.currentStreak,
+          longestStreak: streakInfo?.longestStreak,
+          totalDays: streakInfo?.totalDays,
+          hasError: !!streakError
+        });
+        
+        const currentStreak = streakInfo?.currentStreak || 0;
+        console.log('Streak comparison:', {
+          calculated: currentStreak,
+          stored: profile.streak,
+          needsUpdate: currentStreak !== profile.streak
+        });
+
+        // Only update if the calculated streak is different from stored
+        if (currentStreak !== profile.streak) {
+          console.log('Updating profile streak from', profile.streak, 'to', currentStreak);
+          const { error: updateError } = await database.updateProfile(profile.id, { streak: currentStreak });
+          if (updateError) {
+            console.error('Error updating profile streak:', updateError);
+          } else {
+            console.log('Successfully updated profile streak');
+          }
+        }
+
+        const xp = profile.xp || 0;
+        const leaderboardItem = {
+          id: profile.id,
+          name: profile.name || 'Anonymous User',
+          avatar: profile.avatar_url || 'https://raw.githubusercontent.com/maria-ivanova/images/main/default_avatar.jpg',
+          xp,
+          streak: currentStreak,
+          completedLessons: profile.completed_lessons || 0,
+          isCurrentUser: profile.id === user.id,
+          level: Math.floor(xp / 1000),
+          rank: calculateRank(xp)
+        };
+        
+        console.log('Created leaderboard item:', {
+          id: leaderboardItem.id,
+          name: leaderboardItem.name,
+          streak: leaderboardItem.streak,
+          isCurrentUser: leaderboardItem.isCurrentUser
+        });
+        
+        return leaderboardItem;
+      }));
+
+      console.log('Transformed and sorted leaderboard items:', leaderboardItems.length);
+
+      // Sort based on selected option
+      const sortedItems = [...leaderboardItems].sort((a, b) => {
+        switch (sortBy) {
+          case 'xp':
+            return b.xp - a.xp;
+          case 'streak':
+            return b.streak - a.streak;
+          case 'completed_lessons':
+            return b.completedLessons - a.completedLessons;
+          case 'name':
+            return a.name.localeCompare(b.name);
+          default:
+            return 0;
+        }
+      });
+
+      setLeaderboardData(sortedItems);
+      setTotalUsers(totalCount);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error loading leaderboard:', error);
+      setError('Failed to load leaderboard data');
+      setLoading(false);
+    }
+  };
+
+  const onRefresh = () => {
+    loadLeaderboardData();
+  };
+
+  const loadMore = () => {
+    if (!loading && hasMore) {
+      loadLeaderboardData();
+    }
+  };
 
   const renderHeader = () => (
     <View style={[styles.headerContainer, { backgroundColor: '#efefef' }]}>
       <Text style={[styles.headerTitle, { color: colors.onSurface }]}>Класация</Text>
+      <Text style={[styles.subTitle, { color: colors.onSurfaceVariant }]}>
+        Общо участници: {totalUsers}
+      </Text>
+      
+      <View style={styles.filterContainer}>
+        <TextInput
+          style={[styles.searchInput, { backgroundColor: colors.surface }]}
+          placeholder="Търси потребител..."
+          value={searchQuery}
+          onChangeText={(text) => {
+            setSearchQuery(text);
+            setPage(0);
+            loadLeaderboardData();
+          }}
+        />
+        
+        <Menu
+          visible={menuVisible}
+          onDismiss={() => setMenuVisible(false)}
+          anchor={
+            <Button
+              mode="outlined"
+              onPress={() => setMenuVisible(true)}
+              style={styles.filterButton}
+            >
+              Филтри
+            </Button>
+          }
+        >
+          <Menu.Item
+            title="Сортирай по XP"
+            onPress={() => {
+              setSortBy('xp');
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={sortBy === 'xp' ? 'check' : undefined}
+          />
+          <Menu.Item
+            title="Сортирай по серия"
+            onPress={() => {
+              setSortBy('streak');
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={sortBy === 'streak' ? 'check' : undefined}
+          />
+          <Menu.Item
+            title="Сортирай по уроци"
+            onPress={() => {
+              setSortBy('completed_lessons');
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={sortBy === 'completed_lessons' ? 'check' : undefined}
+          />
+          <Divider />
+          <Menu.Item
+            title="Всички време"
+            onPress={() => {
+              setTimeFilter('all');
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={timeFilter === 'all' ? 'check' : undefined}
+          />
+          <Menu.Item
+            title="За седмицата"
+            onPress={() => {
+              setTimeFilter('weekly');
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={timeFilter === 'weekly' ? 'check' : undefined}
+          />
+          <Menu.Item
+            title="За месеца"
+            onPress={() => {
+              setTimeFilter('monthly');
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={timeFilter === 'monthly' ? 'check' : undefined}
+          />
+          <Divider />
+          <Menu.Item
+            title={showOnlyActive ? "Покажи всички" : "Само активни"}
+            onPress={() => {
+              setShowOnlyActive(!showOnlyActive);
+              setMenuVisible(false);
+              setPage(0);
+              loadLeaderboardData();
+            }}
+            leadingIcon={showOnlyActive ? 'check' : undefined}
+          />
+        </Menu>
+      </View>
     </View>
+  );
+
+  const renderSkeletonLoader = () => (
+    <Animated.View style={{ opacity: loading ? 1 : fadeAnim }}>
+      {[...Array(6)].map((_, idx) => (
+        <View key={idx} style={[styles.leaderboardItem, styles.skeletonRow]}>
+          <View style={[styles.skeletonCircle, { width: 40, height: 40, borderRadius: 20 }]} />
+          <View style={styles.skeletonUserInfo}>
+            <View style={[styles.skeletonText, { width: 120, height: 18, marginBottom: 8 }]} />
+            <View style={[styles.skeletonText, { width: 60, height: 14, marginBottom: 4 }]} />
+            <View style={[styles.skeletonText, { width: 50, height: 12 }]} />
+          </View>
+          <View style={styles.skeletonStats}>
+            <View style={[styles.skeletonText, { width: 32, height: 16, marginBottom: 6 }]} />
+            <View style={[styles.skeletonText, { width: 32, height: 16 }]} />
+          </View>
+        </View>
+      ))}
+    </Animated.View>
   );
 
   const renderLeaderboardItem = ({ item, index }: { item: LeaderboardItem; index: number }) => {
@@ -143,64 +441,117 @@ export default function LeaderboardScreen({ navigation }: LeaderboardScreenProps
   };
 
   return (
-    <View style={[styles.container, { backgroundColor: '#efefef' }]}>
-      {renderHeader()}
-      
-      <View style={styles.contentContainer}>
-        <ScrollView 
-          style={styles.scrollView}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.scrollContent}
-        >
-          <View style={styles.leaderboardContainer}>
-            {leaderboardData.map((item, index) => renderLeaderboardItem({ item, index }))}
-          </View>
-        </ScrollView>
-
-        <Surface style={[styles.bottomContainer, { backgroundColor: '#fafafa' }]}>
-          <Button
-            mode="contained"
-            icon="trophy"
-            onPress={() => {}}
-            style={[styles.challengesButton, { backgroundColor: colors.primary }]}
-            contentStyle={styles.challengesButtonContent}
-            labelStyle={{ color: 'white' }}
+    <View style={styles.mainContainer}>
+      <ScrollView 
+        style={[styles.container, { backgroundColor: colors.background }]}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {renderHeader()}
+        
+        <View style={styles.contentContainer}>
+          <ScrollView 
+            style={styles.scrollView}
+            showsVerticalScrollIndicator={false}
+            contentContainerStyle={styles.leaderboardContent}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshing}
+                onRefresh={onRefresh}
+                colors={[colors.primary]}
+              />
+            }
+            onScroll={({ nativeEvent }) => {
+              const { layoutMeasurement, contentOffset, contentSize } = nativeEvent;
+              const isCloseToBottom = layoutMeasurement.height + contentOffset.y >= contentSize.height - 20;
+              if (isCloseToBottom) {
+                loadMore();
+              }
+            }}
+            scrollEventThrottle={400}
           >
-            Предизвикателства
-          </Button>
-        </Surface>
-      </View>
+            <View style={styles.leaderboardContainer}>
+              {loading && page === 0 ? (
+                renderSkeletonLoader()
+              ) : error ? (
+                <View style={styles.errorContainer}>
+                  <Text style={styles.errorText}>{error}</Text>
+                  <Button 
+                    mode="contained" 
+                    onPress={() => loadLeaderboardData()}
+                    style={styles.retryButton}
+                  >
+                    Опитай отново
+                  </Button>
+                </View>
+              ) : leaderboardData.length === 0 ? (
+                <View style={styles.emptyContainer}>
+                  <Text style={styles.emptyText}>Няма намерени потребители</Text>
+                  <Text style={styles.emptySubText}>
+                    {showOnlyActive 
+                      ? "Няма активни потребители в момента" 
+                      : "Няма потребители в базата данни"}
+                  </Text>
+                </View>
+              ) : (
+                <Animated.View style={{ opacity: fadeAnim }}>
+                  {leaderboardData.map((item, index) => renderLeaderboardItem({ item, index }))}
+                  {loading && hasMore && (
+                    <ActivityIndicator 
+                      style={styles.loadingMore} 
+                      animating={true} 
+                      color={colors.primary} 
+                    />
+                  )}
+                </Animated.View>
+              )}
+            </View>
+          </ScrollView>
+        </View>
+      </ScrollView>
 
-      <BottomNavBar navigation={navigation} activeTab="leaderboard" />
+      <BottomNavigationBar 
+        navigation={navigation}
+        activeTab={activeTab}
+      />
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
+  mainContainer: {
+    flex: 1,
+    position: 'relative',
+  },
   container: {
     flex: 1,
   },
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: Platform.OS === 'ios' ? 100 : 80, // Increased padding for bottom nav
+  },
   contentContainer: {
     flex: 1,
-    marginBottom: 60, // Space for the navigation bar
+  },
+  scrollView: {
+    flex: 1,
+  },
+  leaderboardContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
   },
   headerContainer: {
     padding: 16,
     backgroundColor: '#efefef',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+    marginBottom: 16,
   },
   headerTitle: {
     fontSize: 28,
     fontWeight: 'bold',
     textAlign: 'center',
     marginTop: 8,
-  },
-  scrollView: {
-    flex: 1,
-  },
-  scrollContent: {
-    padding: 16,
   },
   leaderboardContainer: {
     marginBottom: 16,
@@ -268,4 +619,100 @@ const styles = StyleSheet.create({
   challengesButtonContent: {
     paddingVertical: 8,
   },
-}); 
+  errorText: {
+    color: 'red',
+    textAlign: 'center',
+    marginTop: 16,
+  },
+  subTitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  loadingMore: {
+    marginVertical: 16,
+  },
+  filterContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 16,
+    paddingHorizontal: 16,
+    gap: 8,
+  },
+  searchInput: {
+    flex: 1,
+    height: 40,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    fontSize: 14,
+  },
+  filterButton: {
+    borderRadius: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 16,
+    color: '#666',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  retryButton: {
+    marginTop: 8,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#666',
+    textAlign: 'center',
+  },
+  emptySubText: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 8,
+  },
+  skeletonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 16,
+    marginBottom: 12,
+    backgroundColor: '#f5f5f5',
+  },
+  skeletonCircle: {
+    backgroundColor: '#e0e0e0',
+    marginRight: 16,
+  },
+  skeletonUserInfo: {
+    flex: 1,
+    justifyContent: 'center',
+  },
+  skeletonText: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 4,
+  },
+  skeletonStats: {
+    flexDirection: 'column',
+    alignItems: 'flex-end',
+    gap: 8,
+    marginLeft: 16,
+  },
+});
+
+export default LeaderboardScreen; 

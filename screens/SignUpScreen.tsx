@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, Image, TouchableOpacity, TextInput, ViewStyle, TextStyle, ImageStyle, StyleProp, Text, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Image, TouchableOpacity, TextInput, ViewStyle, TextStyle, ImageStyle, StyleProp, Text, Alert, ActivityIndicator, Platform, Linking } from 'react-native';
 import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useTheme, THEME } from '../ThemeContext';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -10,6 +10,7 @@ type RootStackParamList = {
   Home: undefined;
   SignUp: undefined;
   SignIn: undefined;
+  Invitation: { userId: string };
 };
 
 // Define props type for the SignUpScreen component
@@ -24,10 +25,10 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [passwordRequirements, setPasswordRequirements] = useState({
-    length: false,
     lowercase: false,
     uppercase: false,
-    number: false
+    number: false,
+    minLength: false
   });
   
   // Get theme with fallback
@@ -37,26 +38,26 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
   // Update password requirements as user types
   useEffect(() => {
     setPasswordRequirements({
-      length: password.length >= 6,
       lowercase: /[a-z]/.test(password),
       uppercase: /[A-Z]/.test(password),
-      number: /[0-9]/.test(password)
+      number: /[0-9]/.test(password),
+      minLength: password.length >= 6
     });
   }, [password]);
 
   const validatePassword = (pass: string) => {
     const requirements = {
-      length: pass.length >= 6,
       lowercase: /[a-z]/.test(pass),
       uppercase: /[A-Z]/.test(pass),
-      number: /[0-9]/.test(pass)
+      number: /[0-9]/.test(pass),
+      minLength: pass.length >= 6
     };
 
     const missingRequirements = [];
-    if (!requirements.length) missingRequirements.push('Паролата трябва да е поне 6 символа');
     if (!requirements.lowercase) missingRequirements.push('Паролата трябва да съдържа поне една малка буква');
     if (!requirements.uppercase) missingRequirements.push('Паролата трябва да съдържа поне една главна буква');
     if (!requirements.number) missingRequirements.push('Паролата трябва да съдържа поне една цифра');
+    if (!requirements.minLength) missingRequirements.push('Паролата трябва да е поне 6 символа');
 
     return missingRequirements.length > 0 ? missingRequirements.join('\n') : null;
   };
@@ -88,80 +89,139 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       setLoading(true);
       setError('');
 
-      console.log('Attempting to sign up...');
-      const { data, error: signUpError } = await auth.signUp(email, password);
+      console.log('Starting signup process...');
+      console.log('Attempting to sign up with email:', email);
+      
+      // First, try to sign up without any additional data
+      const { data: { user }, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password
+      });
 
       console.log('Sign up result:', {
-        success: !!data?.user,
-        error: signUpError ? signUpError.message : null
+        success: !!user,
+        userId: user?.id,
+        error: signUpError ? {
+          message: signUpError.message,
+          status: signUpError.status,
+          name: signUpError.name
+        } : null
       });
 
       if (signUpError) {
+        console.error('Signup error details:', {
+          message: signUpError.message,
+          status: signUpError.status,
+          name: signUpError.name
+        });
         throw signUpError;
       }
 
-      if (!data?.user) {
+      if (!user) {
+        console.error('No user data received after signup');
         throw new Error('No user data received');
       }
 
       // Create initial profile record
-      console.log('Creating profile record...');
-      const { error: profileError } = await database.createProfile({
-        id: data.user.id,
-        name: name,
-        avatar_url: null,
-        xp: 0,
-        streak: 0,
-        completed_lessons: 0,
-        completed_quizzes: 0,
-        social_links: { facebook: '', linkedin: '' },
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      });
+      console.log('Creating profile record for user:', user.id);
+      try {
+        // Create profile directly without checking or selecting
+        const { error: insertError } = await supabase
+          .from('profiles')
+          .insert({
+            id: user.id,
+            name: name,
+            xp: 0,
+            streak: 0,
+            completed_lessons: 0,
+            completed_quizzes: 0,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          });
 
-      if (profileError) {
-        console.error('Profile creation error:', profileError);
-        throw profileError;
-      }
+        if (insertError) {
+          // If the error is about duplicate key, the profile already exists
+          if (insertError.code === '23505') {
+            console.log('Profile already exists, updating...');
+            const { error: updateError } = await supabase
+              .from('profiles')
+              .update({ name })
+              .eq('id', user.id);
 
-      // After successful sign-up and data creation, try to sign in automatically
-      const { data: signInData, error: signInError } = await auth.signIn(email, password);
-      
-      if (signInError) {
-        // If auto sign-in fails, show the confirmation message
-        Alert.alert(
-          'Успешна регистрация',
-          'Моля, проверете имейла си за потвърждение.',
-          [
-            {
-              text: 'OK',
-              onPress: () => navigation.replace('SignIn')
+            if (updateError) {
+              console.error('Error updating profile:', updateError);
+              throw updateError;
             }
-          ]
-        );
-      } else {
-        // If auto sign-in succeeds, go to Home
-        navigation.replace('Home');
+          } else {
+            console.error('Error creating profile:', insertError);
+            throw insertError;
+          }
+        }
+
+        // Update user metadata after profile is created
+        const { error: updateError } = await supabase.auth.updateUser({
+          data: { name: name }
+        });
+
+        if (updateError) {
+          console.error('Error updating user metadata:', updateError);
+          // Don't throw here, as the profile is already created
+        }
+
+        console.log('Profile operation completed successfully');
+        
+        // Set loading to false before navigation
+        setLoading(false);
+
+        // Force a hard reload after a short delay to ensure profile is created
+        if (Platform.OS === 'web') {
+          setTimeout(() => {
+            // Clear any stored data
+            localStorage.clear();
+            sessionStorage.clear();
+            // Force a complete reload
+            window.location.replace('/');
+          }, 500);
+        } else {
+          navigation.replace('Invitation', { userId: user.id });
+        }
+        return;
+      } catch (err) {
+        console.error('Profile operation error details:', {
+          message: err instanceof Error ? err.message : 'Unknown error',
+          name: err instanceof Error ? err.name : 'Unknown',
+          error: err
+        });
+        throw err;
       }
     } catch (err) {
-      console.error('Sign up error:', err);
+      console.error('Sign up error details:', {
+        message: err instanceof Error ? err.message : 'Unknown error',
+        name: err instanceof Error ? err.name : 'Unknown',
+        error: err
+      });
+      
       let errorMessage = 'Грешка при регистрация';
       
       if (err instanceof Error) {
         if (err.message.includes('User already registered')) {
           errorMessage = 'Този имейл вече е регистриран';
-        } else if (err.message.includes('Password should be at least 6 characters')) {
-          errorMessage = 'Паролата трябва да е поне 6 символа';
         } else if (err.message.includes('Password should contain')) {
           errorMessage = 'Паролата трябва да съдържа малки и главни букви, и цифри';
         } else if (err.message.includes('Unable to validate email address')) {
           errorMessage = 'Моля, въведете валиден имейл адрес';
+        } else if (err.message.includes('Database error')) {
+          errorMessage = 'Грешка в базата данни. Моля, опитайте отново по-късно.';
+          console.error('Database error during signup:', err);
+        } else if (err.message.includes('duplicate key')) {
+          errorMessage = 'Профилът вече съществува. Моля, опитайте да влезете.';
+        } else if (err.message.includes('permission denied')) {
+          errorMessage = 'Нямате необходимите права. Моля, опитайте отново по-късно.';
         }
       }
       
       setError(errorMessage);
       Alert.alert('Грешка', errorMessage);
-    } finally {
       setLoading(false);
     }
   };
@@ -170,14 +230,84 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
     navigation.navigate('SignIn');
   };
 
-  const handleGoogleSignIn = () => {
-    // Bypass Google authentication and directly navigate to Home
-    navigation.replace('Home');
+  const handleGoogleSignIn = async () => {
+    try {
+      setLoading(true);
+      setError('');
+
+      // Get the Supabase project URL
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const redirectUrl = Platform.OS === 'web' 
+        ? window.location.origin  // For web testing
+        : `${supabaseUrl}/auth/v1/callback`;  // For native app - using Supabase callback URL
+
+      console.log('Starting Google sign in process:', {
+        platform: Platform.OS,
+        redirectUrl,
+        supabaseUrl,
+        currentUrl: Platform.OS === 'web' ? window.location.href : 'native app'
+      });
+
+      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUrl,
+          skipBrowserRedirect: Platform.OS !== 'web'  // Only skip for native
+        }
+      });
+
+      console.log('Google sign in response:', {
+        success: !!data,
+        hasUrl: !!data?.url,
+        error: signInError ? {
+          message: signInError.message,
+          status: signInError.status,
+          name: signInError.name
+        } : null,
+        platform: Platform.OS
+      });
+
+      if (signInError) {
+        throw signInError;
+      }
+
+      if (data?.url && Platform.OS !== 'web') {
+        console.log('Attempting to open auth URL in browser:', data.url);
+        const supported = await Linking.canOpenURL(data.url);
+        if (supported) {
+          await Linking.openURL(data.url);
+          console.log('Successfully opened auth URL in browser');
+        } else {
+          console.error('Cannot open URL:', data.url);
+          Alert.alert('Error', 'Cannot open authentication URL');
+        }
+      } else if (Platform.OS === 'web') {
+        console.log('Web platform - browser will handle redirect automatically');
+      }
+    } catch (err) {
+      console.error('Google sign in error:', {
+        error: err,
+        message: err instanceof Error ? err.message : 'Unknown error',
+        name: err instanceof Error ? err.name : 'Unknown',
+        platform: Platform.OS
+      });
+      setError('Грешка при влизане с Google');
+      Alert.alert('Грешка', 'Грешка при влизане с Google');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleAppleSignIn = () => {
     // Bypass Apple authentication and directly navigate to Home
     navigation.replace('Home');
+  };
+
+  const areAllRequirementsMet = () => {
+    return passwordRequirements.lowercase && 
+           passwordRequirements.uppercase && 
+           passwordRequirements.number &&
+           passwordRequirements.minLength;
   };
 
   return (
@@ -221,33 +351,66 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
         selectionColor="#D4AF37"
       />
 
-      {/* Password Requirements */}
-      <View style={styles.requirementsContainer}>
-        <Text style={[
-          styles.requirementText,
-          passwordRequirements.length && styles.requirementMet
-        ]}>
-          • Паролата трябва да е поне 6 символа
-        </Text>
-        <Text style={[
-          styles.requirementText,
-          passwordRequirements.lowercase && styles.requirementMet
-        ]}>
-          • Паролата трябва да съдържа поне една малка буква
-        </Text>
-        <Text style={[
-          styles.requirementText,
-          passwordRequirements.uppercase && styles.requirementMet
-        ]}>
-          • Паролата трябва да съдържа поне една главна буква
-        </Text>
-        <Text style={[
-          styles.requirementText,
-          passwordRequirements.number && styles.requirementMet
-        ]}>
-          • Паролата трябва да съдържа поне една цифра
-        </Text>
-      </View>
+      {/* Password Requirements with Icons - Only shown when not all requirements are met */}
+      {!areAllRequirementsMet() && password.length > 0 && (
+        <View style={styles.requirementsContainer}>
+          <View style={styles.requirementRow}>
+            <FontAwesome 
+              name={passwordRequirements.minLength ? "check-circle" : "circle-o"} 
+              size={16} 
+              color={passwordRequirements.minLength ? "#4CAF50" : "#FF6B6B"} 
+            />
+            <Text style={[
+              styles.requirementText,
+              passwordRequirements.minLength && styles.requirementMet
+            ]}>
+              Минимум 6 символа
+            </Text>
+          </View>
+
+          <View style={styles.requirementRow}>
+            <FontAwesome 
+              name={passwordRequirements.lowercase ? "check-circle" : "circle-o"} 
+              size={16} 
+              color={passwordRequirements.lowercase ? "#4CAF50" : "#FF6B6B"} 
+            />
+            <Text style={[
+              styles.requirementText,
+              passwordRequirements.lowercase && styles.requirementMet
+            ]}>
+              Малка буква
+            </Text>
+          </View>
+          
+          <View style={styles.requirementRow}>
+            <FontAwesome 
+              name={passwordRequirements.uppercase ? "check-circle" : "circle-o"} 
+              size={16} 
+              color={passwordRequirements.uppercase ? "#4CAF50" : "#FF6B6B"} 
+            />
+            <Text style={[
+              styles.requirementText,
+              passwordRequirements.uppercase && styles.requirementMet
+            ]}>
+              Главна буква
+            </Text>
+          </View>
+          
+          <View style={styles.requirementRow}>
+            <FontAwesome 
+              name={passwordRequirements.number ? "check-circle" : "circle-o"} 
+              size={16} 
+              color={passwordRequirements.number ? "#4CAF50" : "#FF6B6B"} 
+            />
+            <Text style={[
+              styles.requirementText,
+              passwordRequirements.number && styles.requirementMet
+            ]}>
+              Цифра
+            </Text>
+          </View>
+        </View>
+      )}
       
       {error ? <Text style={styles.error}>{error}</Text> : null}
       
@@ -414,10 +577,15 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     paddingHorizontal: 16,
   } as ViewStyle,
+  requirementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  } as ViewStyle,
   requirementText: {
     color: '#FF6B6B',
-    fontSize: 12,
-    marginBottom: 4,
+    fontSize: 14,
+    marginLeft: 8,
   } as TextStyle,
   requirementMet: {
     color: '#4CAF50',

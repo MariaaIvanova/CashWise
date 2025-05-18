@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions, Animated, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, Dimensions, Animated, ActivityIndicator, Platform } from 'react-native';
 import { Text, IconButton, Surface, useTheme, Button } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { Calendar } from 'react-native-calendars';
 import { LinearGradient } from 'expo-linear-gradient';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../AppNavigator';
-import BottomNavBar from '../components/BottomNavBar';
+import BottomNavigationBar from '../components/BottomNavigationBar';
 import { auth, database } from '../supabase';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
 type CalendarScreenProps = {
-  navigation: NativeStackNavigationProp<RootStackParamList, 'Calendar'>;
+  navigation: NativeStackNavigationProp<RootStackParamList>;
 };
+
+type TabKey = 'home' | 'leaderboard' | 'calendar' | 'profile';
 
 interface MarkedDate {
   marked: boolean;
@@ -42,51 +44,59 @@ interface LearningData {
   markedDates: MarkedDates;
 }
 
-export default function CalendarScreen({ navigation }: CalendarScreenProps) {
-  const theme = useTheme();
-  const colors = theme.colors;
+const CalendarScreen: React.FC<CalendarScreenProps> = ({ navigation }) => {
+  const { colors } = useTheme();
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [streakAnimation] = useState<Animated.Value>(new Animated.Value(0));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fadeAnim] = useState(new Animated.Value(0));
   const [learningData, setLearningData] = useState<LearningData>({
     currentStreak: 0,
     longestStreak: 0,
     totalDays: 0,
     markedDates: {}
   });
+  const [activeTab, setActiveTab] = useState<TabKey>('calendar');
+  const [isCalendarReady, setIsCalendarReady] = useState(false);
   
   // Get today's date in YYYY-MM-DD format
   const today = new Date().toISOString().split('T')[0];
   
-  useEffect(() => {
-    loadLearningData();
-  }, []);
-
-  const loadLearningData = async () => {
+  const initializeScreen = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const { user, error: userError } = await auth.getCurrentUser();
+      // Get user and streak data in parallel
+      const [userResult, streakResult] = await Promise.all([
+        auth.getCurrentUser(),
+        database.getStreakInfo((await auth.getCurrentUser()).user?.id || '')
+      ]);
+
+      const { user, error: userError } = userResult;
       if (userError) throw userError;
       if (!user) {
         navigation.replace('SignIn');
         return;
       }
 
-      const { data, error: streakError } = await database.getStreakInfo(user.id);
+      const { data, error: streakError } = streakResult;
       if (streakError) throw streakError;
 
       if (data) {
         setLearningData(data);
-        // Animate the streak number
-        Animated.spring(streakAnimation, {
-          toValue: 1,
-          tension: 50,
-          friction: 7,
-          useNativeDriver: true,
-        }).start();
+        // Start calendar initialization
+        setIsCalendarReady(true);
+        // Animate streak after a short delay
+        setTimeout(() => {
+          Animated.spring(streakAnimation, {
+            toValue: 1,
+            tension: 50,
+            friction: 7,
+            useNativeDriver: true,
+          }).start();
+        }, 100);
       }
     } catch (err) {
       console.error('Error loading learning data:', err);
@@ -96,6 +106,20 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
     }
   };
 
+  useEffect(() => {
+    initializeScreen();
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !error) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [loading, error]);
+
   const renderHeader = () => (
     <View style={[styles.headerContainer, { backgroundColor: '#efefef' }]}>
       <Text style={[styles.headerTitle, { color: colors.onSurface }]}>Моят Прогрес</Text>
@@ -103,9 +127,9 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
   );
 
   const renderStreakInfo = () => (
-    <Surface style={[styles.streakContainer, { backgroundColor: colors.surface }]}>
+    <Surface style={[styles.streakContainer, { backgroundColor: '#3A46A4' }]}>
       <LinearGradient
-        colors={[colors.primary + '20', colors.primary + '05']}
+        colors={['#2A3694', '#4A56B4']}
         style={styles.gradientBackground}
       />
       <Animated.View
@@ -178,19 +202,38 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
     </View>
   );
 
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.centered]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
+  const renderSkeletonLoader = () => (
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      <View style={[styles.headerContainer, styles.skeletonContainer]} />
+      <Surface style={[styles.streakContainer, styles.skeletonContainer]}>
+        <View style={styles.skeletonStreakContent}>
+          <View style={[styles.skeletonCircle, { width: 48, height: 48 }]} />
+          <View style={[styles.skeletonText, { width: 80, height: 48 }]} />
+          <View style={[styles.skeletonText, { width: 120, height: 20 }]} />
+        </View>
+        <View style={styles.statsRow}>
+          <View style={styles.statItem}>
+            <View style={[styles.skeletonText, { width: 60, height: 24 }]} />
+            <View style={[styles.skeletonText, { width: 100, height: 16 }]} />
+          </View>
+          <View style={styles.statDivider} />
+          <View style={styles.statItem}>
+            <View style={[styles.skeletonText, { width: 60, height: 24 }]} />
+            <View style={[styles.skeletonText, { width: 100, height: 16 }]} />
+          </View>
+        </View>
+      </Surface>
+      <Surface style={[styles.calendarContainer, styles.skeletonContainer]}>
+        <View style={[styles.skeletonCalendar, { height: 350 }]} />
+      </Surface>
+    </Animated.View>
+  );
 
   if (error) {
     return (
       <View style={[styles.container, styles.centered]}>
         <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
-        <Button mode="contained" onPress={loadLearningData} style={{ marginTop: 16 }}>
+        <Button mode="contained" onPress={initializeScreen} style={{ marginTop: 16 }}>
           Retry
         </Button>
       </View>
@@ -198,87 +241,100 @@ export default function CalendarScreen({ navigation }: CalendarScreenProps) {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: '#efefef' }]}>
-      {renderHeader()}
+    <View style={styles.mainContainer}>
       <ScrollView 
-        style={styles.scrollView}
-        showsVerticalScrollIndicator={false}
+        style={[styles.container, { backgroundColor: colors.background }]}
         contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
       >
-        {renderStreakInfo()}
-        
-        <Surface style={[styles.calendarContainer, { backgroundColor: '#fafafa' }]}>
-          <Calendar
-            theme={{
-              calendarBackground: 'transparent',
-              textSectionTitleColor: colors.primary,
-              selectedDayBackgroundColor: colors.primary,
-              selectedDayTextColor: '#ffffff',
-              todayTextColor: colors.primary,
-              dayTextColor: colors.onSurface,
-              textDisabledColor: colors.onSurfaceVariant,
-              dotColor: colors.primary,
-              selectedDotColor: colors.primary,
-              arrowColor: colors.primary,
-              monthTextColor: colors.primary,
-              textMonthFontWeight: 'bold',
-              textDayFontSize: 14,
-              textMonthFontSize: 16,
-              textDayHeaderFontSize: 14,
-              'stylesheet.calendar.header': {
-                dayTextAtIndex0: {
-                  color: colors.primary
-                },
-                dayTextAtIndex6: {
-                  color: colors.primary
-                }
-              }
-            }}
-            current={today}
-            minDate={new Date(new Date().setMonth(new Date().getMonth() - 2)).toISOString().split('T')[0]}
-            maxDate={today}
-            firstDay={1}
-            markingType="custom"
-            markedDates={{
-              ...learningData.markedDates,
-              [selectedDate]: selectedDate !== today ? {
-                ...(learningData.markedDates[selectedDate] || {}),
-                selected: true,
-                selectedColor: colors.primary,
-                customTextStyle: {
-                  color: '#FFFFFF',
-                  fontWeight: 'bold',
-                }
-              } : learningData.markedDates[selectedDate]
-            }}
-            onDayPress={(day: { dateString: string }) => setSelectedDate(day.dateString)}
-            enableSwipeMonths={true}
-            style={styles.calendar}
-          />
-          {renderLegend()}
-        </Surface>
+        {loading ? (
+          renderSkeletonLoader()
+        ) : (
+          <Animated.View style={{ opacity: fadeAnim }}>
+            {renderHeader()}
+            {renderStreakInfo()}
+            {isCalendarReady && (
+              <Surface style={[styles.calendarContainer, { backgroundColor: '#fafafa' }]}>
+                <Calendar
+                  theme={{
+                    calendarBackground: 'transparent',
+                    textSectionTitleColor: '#000000',
+                    selectedDayBackgroundColor: colors.primary,
+                    selectedDayTextColor: '#ffffff',
+                    todayTextColor: colors.primary,
+                    dayTextColor: '#000000',
+                    textDisabledColor: '#666666',
+                    dotColor: colors.primary,
+                    selectedDotColor: colors.primary,
+                    arrowColor: colors.primary,
+                    monthTextColor: '#000000',
+                    textMonthFontWeight: 'bold',
+                    textDayFontSize: 14,
+                    textMonthFontSize: 16,
+                    textDayHeaderFontSize: 14,
+                    'stylesheet.calendar.header': {
+                      dayTextAtIndex0: {
+                        color: '#000000'
+                      },
+                      dayTextAtIndex6: {
+                        color: '#000000'
+                      }
+                    }
+                  }}
+                  current={today}
+                  minDate={new Date(new Date().setMonth(new Date().getMonth() - 2)).toISOString().split('T')[0]}
+                  maxDate={today}
+                  firstDay={1}
+                  markingType="custom"
+                  markedDates={{
+                    ...learningData.markedDates,
+                    [selectedDate]: selectedDate !== today ? {
+                      ...(learningData.markedDates[selectedDate] || {}),
+                      selected: true,
+                      selectedColor: colors.primary,
+                      customTextStyle: {
+                        color: '#FFFFFF',
+                        fontWeight: 'bold',
+                      }
+                    } : learningData.markedDates[selectedDate]
+                  }}
+                  onDayPress={(day: { dateString: string }) => setSelectedDate(day.dateString)}
+                  enableSwipeMonths={true}
+                  style={styles.calendar}
+                />
+                {renderLegend()}
+              </Surface>
+            )}
+          </Animated.View>
+        )}
       </ScrollView>
 
-      <BottomNavBar navigation={navigation} activeTab="calendar" />
+      <BottomNavigationBar 
+        navigation={navigation}
+        activeTab={activeTab}
+      />
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
+  mainContainer: {
+    flex: 1,
+    position: 'relative',
+  },
   container: {
     flex: 1,
   },
-  scrollView: {
-    flex: 1,
-  },
   scrollContent: {
-    paddingBottom: 60,
+    flexGrow: 1,
+    paddingBottom: Platform.OS === 'ios' ? 100 : 80, // Increased padding for bottom nav
   },
   headerContainer: {
     padding: 16,
     backgroundColor: '#efefef',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0, 0, 0, 0.1)',
+    marginBottom: 16,
   },
   headerTitle: {
     fontSize: 28,
@@ -388,4 +444,29 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginHorizontal: 20,
   },
-}); 
+  skeletonContainer: {
+    backgroundColor: '#f5f5f5',
+    overflow: 'hidden',
+  },
+  skeletonStreakContent: {
+    alignItems: 'center',
+    padding: 24,
+  },
+  skeletonCircle: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 24,
+    marginBottom: 8,
+  },
+  skeletonText: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 4,
+    marginTop: 8,
+  },
+  skeletonCalendar: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 8,
+    margin: 16,
+  },
+});
+
+export default CalendarScreen; 

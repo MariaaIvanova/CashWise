@@ -10,6 +10,8 @@ import CalendarScreen from './screens/CalendarScreen';
 import LeaderboardScreen from './screens/LeaderboardScreen';
 import FeedbackScreen from './screens/FeedbackScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import ChallengesScreen from './screens/ChallengesScreen';
+import InvitationScreen from './screens/InvitationScreen';
 
 interface LessonRouteParams {
   lessonId: string;
@@ -30,19 +32,30 @@ export type RootStackParamList = {
   SignUp: undefined;
   Home: undefined;
   Lesson: LessonRouteParams;
-  Quiz: { lessonId: string };
+  Quiz: { 
+    lessonId: string;
+    onComplete?: () => Promise<void>;
+  };
   Calendar: undefined;
   Leaderboard: undefined;
   Feedback: undefined;
-  Profile: undefined;
+  Profile: {
+    onComplete?: () => Promise<void>;
+  };
+  Challenges: undefined;
+  Invitation: { userId: string };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-export default function AppNavigator() {
+interface AppNavigatorProps {
+  isAuthenticated: boolean;
+}
+
+export default function AppNavigator({ isAuthenticated }: AppNavigatorProps) {
   return (
     <Stack.Navigator
-      initialRouteName="Splash"
+      initialRouteName={isAuthenticated ? "Home" : "SignIn"}
       screenOptions={{
         headerShown: false,
       }}
@@ -50,6 +63,7 @@ export default function AppNavigator() {
       <Stack.Screen name="Splash" component={SplashScreen} />
       <Stack.Screen name="SignIn" component={SignInScreen} />
       <Stack.Screen name="SignUp" component={SignUpScreen} />
+      <Stack.Screen name="Invitation" component={InvitationScreen} />
       <Stack.Screen name="Home" component={HomeScreen} />
       <Stack.Screen name="Lesson" component={LessonScreen as React.ComponentType<any>} />
       <Stack.Screen name="Quiz" component={QuizScreen as React.ComponentType<any>} />
@@ -57,6 +71,7 @@ export default function AppNavigator() {
       <Stack.Screen name="Leaderboard" component={LeaderboardScreen} />
       <Stack.Screen name="Feedback" component={FeedbackScreen} />
       <Stack.Screen name="Profile" component={ProfileScreen} />
+      <Stack.Screen name="Challenges" component={ChallengesScreen} />
     </Stack.Navigator>
   );
 } 

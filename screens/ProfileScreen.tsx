@@ -1,13 +1,15 @@
 import React, { useState, useEffect, ReactNode } from 'react';
-import { View, StyleSheet, ScrollView, Dimensions, Image, Platform, Alert, TouchableOpacity } from 'react-native';
+import { View, StyleSheet, ScrollView, Dimensions, Image, Platform, Alert, TouchableOpacity, Animated } from 'react-native';
 import { Surface, Text, IconButton, useTheme, Button, Switch, Divider, Chip, Portal, Modal, TextInput, Dialog, Avatar, FAB, ActivityIndicator } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as ImagePicker from 'expo-image-picker';
 import CustomButton from '../components/CustomButton';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../AppNavigator';
-import BottomNavBar from '../components/BottomNavBar';
-import { auth, database, supabase } from '../supabase';
+import BottomNavigationBar from '../components/BottomNavigationBar';
+import { auth, database, supabase, avatarStorage } from '../supabase';
+import NotificationService from '../services/NotificationService';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 
@@ -21,6 +23,7 @@ interface Achievement {
   id: number;
   title: string;
   description: string;
+  icon?: string;
   completed: boolean;
 }
 
@@ -60,7 +63,56 @@ interface UserData {
   achievements: Achievement[];
 }
 
-export default function ProfileScreen({ navigation }: ProfileScreenProps) {
+type TabKey = 'home' | 'leaderboard' | 'calendar' | 'profile';
+
+// Update validation messages
+const validateSocialLink = (platform: string, value: string): string | null => {
+  if (!value) return null; // Empty values are allowed
+  
+  const trimmedValue = value.trim();
+  if (!trimmedValue) return null;
+
+  switch (platform) {
+    case 'facebook':
+      return /^[a-zA-Z0-9.]{5,50}$/.test(trimmedValue) 
+        ? null 
+        : 'Facebook потребителското име трябва да е между 5 и 50 символа (букви, цифри, точки)';
+    case 'linkedin':
+      return /^[a-zA-Z0-9-]{3,100}$/.test(trimmedValue)
+        ? null
+        : 'LinkedIn потребителското име трябва да е между 3 и 100 символа (букви, цифри, тирета)';
+    case 'instagram':
+      return /^[a-zA-Z0-9._]{1,30}$/.test(trimmedValue)
+        ? null
+        : 'Instagram потребителското име трябва да е между 1 и 30 символа (букви, цифри, точки, долни черти)';
+    default:
+      return 'Невалидна платформа';
+  }
+};
+
+// Update social media platform info
+const SOCIAL_PLATFORMS = {
+  facebook: {
+    icon: 'facebook',
+    label: 'Facebook',
+    placeholder: 'Въведете вашето Facebook потребителско име',
+    prefix: 'facebook.com/'
+  },
+  linkedin: {
+    icon: 'linkedin',
+    label: 'LinkedIn',
+    placeholder: 'Въведете вашето LinkedIn потребителско име',
+    prefix: 'linkedin.com/in/'
+  },
+  instagram: {
+    icon: 'instagram',
+    label: 'Instagram',
+    placeholder: 'Въведете вашето Instagram потребителско име',
+    prefix: 'instagram.com/'
+  }
+} as const;
+
+const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const { colors } = useTheme();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -68,6 +120,10 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [darkMode, setDarkMode] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [editingPlatform, setEditingPlatform] = useState<string | null>(null);
+  const [socialLinkEditValue, setSocialLinkEditValue] = useState('');
+  const [socialLinkValidationError, setSocialLinkValidationError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabKey>('profile');
   const [userData, setUserData] = useState<UserData>({
     name: '',
     email: '',
@@ -90,103 +146,68 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
+  const [isProfileReady, setIsProfileReady] = useState(false);
+  const [fadeAnim] = useState(new Animated.Value(0));
 
-  useEffect(() => {
-    checkAuthAndLoadData();
-  }, []);
-
-  const checkAuthAndLoadData = async () => {
+  const initializeProfile = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      console.log('Checking auth session...');
-      
-      // Check for active session using supabase client directly
-      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
-      
-      console.log('Session check result:', {
-        hasSession: !!session,
-        sessionError: sessionError ? sessionError.message : null,
-        sessionData: session ? {
-          user: session.user?.id,
-          expires_at: session.expires_at,
-          access_token: !!session.access_token
-        } : null
-      });
-      
-      if (sessionError) {
-        console.error('Session error:', sessionError);
-        throw sessionError;
-      }
+      // Get session and user data in parallel
+      const [sessionResult, userResult] = await Promise.all([
+        supabase.auth.getSession(),
+        auth.getCurrentUser()
+      ]);
 
+      const { data: { session }, error: sessionError } = sessionResult;
+      if (sessionError) throw sessionError;
       if (!session) {
-        console.log('No session found, redirecting to SignIn');
         navigation.replace('SignIn');
         return;
       }
 
-      console.log('Session found, loading user data...');
-      // Session exists, load user data
-      await loadUserData();
-    } catch (err) {
-      console.error('Auth check error details:', {
-        error: err,
-        message: err instanceof Error ? err.message : 'Unknown error',
-        stack: err instanceof Error ? err.stack : undefined
-      });
-      
-      if (err instanceof Error && err.message.includes('auth session is missing')) {
-        console.log('Auth session missing error, redirecting to SignIn');
-        navigation.replace('SignIn');
-      } else {
-        setError(err instanceof Error ? err.message : 'An error occurred');
-        Alert.alert('Error', 'Failed to load profile data');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadUserData = async () => {
-    try {
-      console.log('Getting current user...');
-      const { user, error: userError } = await auth.getCurrentUser();
-      
-      console.log('Current user check result:', {
-        hasUser: !!user,
-        userId: user?.id,
-        userError: userError instanceof Error ? userError.message : null
-      });
-
-      if (userError) {
-        console.error('User error:', userError);
-        throw userError;
-      }
-      
+      const { user, error: userError } = userResult;
+      if (userError) throw userError;
       if (!user) {
-        console.log('No user found, redirecting to SignIn');
         navigation.replace('SignIn');
         return;
       }
 
-      console.log('Fetching profile data...');
-      const { data: profile, error: profileError } = await database.getProfile(user.id);
-      console.log('Profile fetch result:', {
-        hasProfile: !!profile,
-        profileError: profileError instanceof Error ? profileError.message : null
-      });
+      // Load all profile data in parallel
+      const [
+        profileResult,
+        achievementsResult,
+        userAchievementsResult,
+        settingsResult,
+        avatarResult
+      ] = await Promise.all([
+        database.getProfile(user.id),
+        database.getAchievements(),
+        database.getUserAchievements(user.id),
+        database.getUserSettings(user.id),
+        avatarStorage.getAvatarUrl(user.id)
+      ]);
+
+      const { data: profile, error: profileError } = profileResult;
       if (profileError) throw profileError;
 
-      // Cast profile to Profile type
       const typedProfile = profile as Profile;
-
-      // Ensure social_links has the required properties
       const socialLinks: SocialLinks = {
         facebook: typedProfile?.social_links?.facebook || '',
         linkedin: typedProfile?.social_links?.linkedin || '',
         instagram: typedProfile?.social_links?.instagram || ''
       };
+
+      // Map achievements with completion status
+      const achievements = achievementsResult.data?.map(achievement => ({
+        id: achievement.id,
+        title: achievement.title,
+        description: achievement.description,
+        icon: achievement.icon,
+        completed: userAchievementsResult.data?.some(ua => ua.id === achievement.id) || false
+      })) || [];
 
       // Update state with fetched data
       setUserData({
@@ -200,44 +221,48 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
         streak: typedProfile?.streak || 0,
         completedLessons: typedProfile?.completed_lessons || 0,
         completedQuizzes: typedProfile?.completed_quizzes || 0,
-        achievements: [] // This will be populated from achievements data
+        achievements
       });
-
-      // Fetch user settings
-      const { data: settings, error: settingsError } = await database.getUserSettings(user.id);
-      if (settingsError) throw settingsError;
-
-      // Fetch user achievements
-      const { data: achievements, error: achievementsError } = await database.getUserAchievements(user.id);
-      if (achievementsError) throw achievementsError;
-
-      // Fetch user progress
-      const { data: progress, error: progressError } = await database.getUserProgress(user.id);
-      if (progressError) throw progressError;
 
       // Update settings
-      if (settings) {
-        setNotificationsEnabled(settings.notifications_enabled);
-        setSoundEnabled(settings.sound_enabled);
-        setDarkMode(settings.dark_mode);
+      if (settingsResult.data) {
+        setNotificationsEnabled(settingsResult.data.notifications_enabled);
+        setSoundEnabled(settingsResult.data.sound_enabled);
+        setDarkMode(settingsResult.data.dark_mode);
       }
 
+      // Set avatar URL
+      setAvatarUrl(avatarResult);
+
+      // Mark profile as ready
+      setIsProfileReady(true);
+
     } catch (err) {
-      console.error('Load data error details:', {
-        error: err,
-        message: err instanceof Error ? err.message : 'Unknown error',
-        stack: err instanceof Error ? err.stack : undefined
-      });
-      
+      console.error('Profile initialization error:', err);
       if (err instanceof Error && err.message.includes('auth session is missing')) {
-        console.log('Auth session missing in loadUserData, redirecting to SignIn');
         navigation.replace('SignIn');
       } else {
         setError(err instanceof Error ? err.message : 'An error occurred');
         Alert.alert('Error', 'Failed to load profile data');
       }
+    } finally {
+      setLoading(false);
     }
   };
+
+  useEffect(() => {
+    initializeProfile();
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !error) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [loading, error]);
 
   const handleEdit = async (field: keyof UserData, value: string | number | string[] | SocialLinks): Promise<void> => {
     if (!isEditing) return;
@@ -325,10 +350,11 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
       });
       if (updateError) throw updateError;
 
-      // Update local state
+      // Update local state and handle notifications
       switch (setting) {
         case 'notifications_enabled':
           setNotificationsEnabled(value);
+          await NotificationService.updateStreakNotificationStatus(value);
           break;
         case 'sound_enabled':
           setSoundEnabled(value);
@@ -345,18 +371,101 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
   const handleAvatarUpload = async () => {
     try {
       setUploadingAvatar(true);
-      // TODO: Implement image picker and upload
-      // For now, we'll just show an alert
-      Alert.alert(
-        'Upload Avatar',
-        'Avatar upload functionality will be implemented soon.',
-        [{ text: 'OK' }]
-      );
+
+      // Request permission
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permission Required',
+          'Please grant permission to access your photos to upload an avatar.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // Launch image picker
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+
+      if (result.canceled) {
+        return;
+      }
+
+      const { user } = await auth.getCurrentUser();
+      if (!user) {
+        throw new Error('No user found');
+      }
+
+      // Get the image file
+      const response = await fetch(result.assets[0].uri);
+      const blob = await response.blob();
+
+      // Upload the avatar
+      const { url, error } = await avatarStorage.uploadAvatar(user.id, blob);
+      if (error) throw error;
+
+      // Update the profile with the new avatar URL
+      const { error: updateError } = await database.updateProfile(user.id, {
+        avatar_url: url
+      });
+      if (updateError) throw updateError;
+
+      // Update local state
+      setAvatarUrl(url);
+      Alert.alert('Success', 'Avatar updated successfully');
     } catch (err) {
-      Alert.alert('Error', 'Failed to upload avatar');
+      console.error('Error uploading avatar:', err);
+      Alert.alert('Error', 'Failed to upload avatar. Please try again.');
     } finally {
       setUploadingAvatar(false);
       setShowAvatarPicker(false);
+    }
+  };
+
+  const handleSocialLinkEdit = (platform: string) => {
+    setEditingPlatform(platform);
+    setSocialLinkEditValue(userData.socialLinks[platform]);
+    setSocialLinkValidationError(null);
+  };
+
+  const handleSocialLinkSave = async (platform: string) => {
+    const error = validateSocialLink(platform, socialLinkEditValue);
+    if (error) {
+      setSocialLinkValidationError(error);
+      return;
+    }
+
+    try {
+      const { user, error: userError } = await auth.getCurrentUser();
+      if (userError) throw userError;
+      if (!user) throw new Error('No user found');
+
+      const updatedLinks = {
+        ...userData.socialLinks,
+        [platform]: socialLinkEditValue.trim()
+      };
+
+      const { error: updateError } = await database.updateProfile(user.id, {
+        social_links: updatedLinks
+      });
+
+      if (updateError) throw updateError;
+
+      setUserData(prev => ({
+        ...prev,
+        socialLinks: updatedLinks
+      }));
+
+      setEditingPlatform(null);
+      setSocialLinkEditValue('');
+      setSocialLinkValidationError(null);
+    } catch (err) {
+      console.error('Error saving social link:', err);
+      Alert.alert('Грешка', 'Неуспешно обновяване на социалната мрежа');
     }
   };
 
@@ -407,11 +516,18 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           onPress={() => isEditing && setShowAvatarPicker(true)}
           disabled={!isEditing || uploadingAvatar}
         >
-          <Avatar.Icon
-            size={90}
-            icon="account"
-            style={{ backgroundColor: '#8A97FF' }}
-          />
+          {avatarUrl ? (
+            <Image
+              source={{ uri: avatarUrl }}
+              style={styles.avatarImage}
+            />
+          ) : (
+            <Avatar.Icon
+              size={90}
+              icon="account"
+              style={{ backgroundColor: '#8A97FF' }}
+            />
+          )}
           {isEditing && !uploadingAvatar && (
             <View style={styles.avatarEditOverlay}>
               <MaterialCommunityIcons name="camera" size={24} color="#FFFFFF" />
@@ -424,36 +540,27 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
           )}
         </TouchableOpacity>
         <View style={styles.profileInfo}>
-          {isEditing ? (
-            <TextInput
-              value={userData.name}
-              onChangeText={(text) => setUserData(prev => ({ ...prev, name: text }))}
-              style={[styles.profileNameInput, { color: '#000000' }]}
-              placeholder="Enter your name"
-              placeholderTextColor="rgba(0, 0, 0, 0.4)"
-              onBlur={() => handleSave()}
-              onSubmitEditing={() => handleSave()}
-            />
-          ) : (
-            <Text style={[styles.profileName, { color: '#000000' }]}>
-              {userData.name || 'Add your name'}
-            </Text>
-          )}
+          <View style={styles.nameContainer}>
+            {isEditing ? (
+              <TextInput
+                value={userData.name}
+                onChangeText={(text) => setUserData(prev => ({ ...prev, name: text }))}
+                style={[styles.profileNameInput, { color: '#000000' }]}
+                placeholder="Въведете вашето име"
+                placeholderTextColor="rgba(0, 0, 0, 0.4)"
+                onBlur={() => handleSave()}
+                onSubmitEditing={() => handleSave()}
+              />
+            ) : (
+              <Text style={[styles.profileName, { color: '#000000' }]}>
+                {userData.name || 'Добавете вашето име'}
+              </Text>
+            )}
+          </View>
           <Text style={[styles.profileEmail, { color: 'rgba(0, 0, 0, 0.6)' }]}>
             {userData.email}
           </Text>
         </View>
-        <IconButton
-          icon={isEditing ? 'check' : 'pencil'}
-          iconColor="#8A97FF"
-          size={24}
-          onPress={() => {
-            if (isEditing) {
-              handleSave();
-            }
-            setIsEditing(!isEditing);
-          }}
-        />
       </View>
     </Surface>
   );
@@ -507,39 +614,32 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
     </Surface>
   );
 
-  const renderAchievements = () => {
-    const achievementsContent = (
-      <>
-        <Text variant="titleMedium" style={{ color: '#000000', marginBottom: 20, fontSize: 18, fontWeight: '600' }}>
-          Постижения
-        </Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-          {userData.achievements.map((achievement: Achievement) => (
-            <View key={achievement.id}>
-              <Chip
-                mode="outlined"
-                selected={achievement.completed}
-                style={{
-                  backgroundColor: achievement.completed ? '#4CAF50' : '#F5F5F5',
-                  borderColor: achievement.completed ? '#4CAF50' : '#E0E0E0',
-                  paddingHorizontal: 12,
-                  paddingVertical: 8,
-                }}
-                onPress={() => {}}
-                children={<Text style={{ color: achievement.completed ? '#FFFFFF' : '#000000', fontSize: 14 }}>{achievement.title}</Text>}
-              />
+  const renderAchievements = () => (
+    <Surface style={cardStyle}>
+      <Text variant="titleMedium" style={{ color: '#000000', marginBottom: 20, fontSize: 18, fontWeight: '600' }}>
+        Постижения
+      </Text>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+        {userData.achievements.map((achievement: Achievement) => (
+          <View key={achievement.id} style={styles.achievementContainer}>
+            <MaterialCommunityIcons
+              name={achievement.icon || 'trophy'}
+              size={28}
+              color={achievement.completed ? '#4CAF50' : '#BDBDBD'}
+            />
+            <View style={styles.achievementInfo}>
+              <Text style={[styles.achievementTitle, { color: achievement.completed ? '#4CAF50' : '#000000' }]}>
+                {achievement.title}
+              </Text>
+              <Text style={styles.achievementDescription}>
+                {achievement.description}
+              </Text>
             </View>
-          ))}
-        </View>
-      </>
-    );
-
-    return (
-      <Surface style={cardStyle}>
-        {achievementsContent}
-      </Surface>
-    );
-  };
+          </View>
+        ))}
+      </View>
+    </Surface>
+  );
 
   const renderInterests = () => (
     <Surface style={cardStyle}>
@@ -556,22 +656,28 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
         )}
       </View>
       <View style={styles.interestsContainer}>
-        {userData.interests.map((interest: string, index: number) => (
-          <View key={index}>
-            <Chip
-              mode="outlined"
-              selected={false}
-              style={{ 
-                backgroundColor: '#F5F5F5', 
-                borderColor: '#8A97FF',
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-              }}
-              onPress={() => {}}
-              children={<Text style={{ color: '#000000', fontSize: 14 }}>{interest}</Text>}
-            />
-          </View>
-        ))}
+        {userData.interests.length > 0 ? (
+          userData.interests.map((interest: string, index: number) => (
+            <View key={index}>
+              <Chip
+                mode="outlined"
+                selected={false}
+                style={{ 
+                  backgroundColor: '#F5F5F5', 
+                  borderColor: '#8A97FF',
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                }}
+                onPress={() => {}}
+                children={<Text style={{ color: '#000000', fontSize: 14 }}>{interest}</Text>}
+              />
+            </View>
+          ))
+        ) : (
+          <Text style={{ color: 'rgba(0, 0, 0, 0.6)', fontStyle: 'italic' }}>
+            Няма добавени интереси
+          </Text>
+        )}
       </View>
     </Surface>
   );
@@ -582,32 +688,70 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
         <Text variant="titleMedium" style={{ color: '#000000', fontSize: 18, fontWeight: '600' }}>
           Социални мрежи
         </Text>
-        {isEditing && (
-          <IconButton
-            icon="pencil"
-            size={20}
-            onPress={() => {
-              // Format social links for editing
-              const formattedLinks = Object.entries(userData.socialLinks)
-                .map(([platform, username]) => `${platform}: ${username}`)
-                .join('\n');
-              setEditValue(formattedLinks);
-              handleEdit('socialLinks', userData.socialLinks);
-            }}
-          />
-        )}
       </View>
       <View style={styles.socialLinksContainer}>
-        {Object.entries(userData.socialLinks).map(([platform, username]) => (
+        {Object.entries(SOCIAL_PLATFORMS).map(([platform, info]) => (
           <View key={platform} style={styles.socialLink}>
             <MaterialCommunityIcons
-              name={platform === 'instagram' ? 'instagram' : platform.toLowerCase()}
+              name={info.icon}
               size={24}
               color="#8A97FF"
             />
-            <Text variant="bodyMedium" style={{ color: '#000000', marginLeft: 12, fontSize: 16 }}>
-              {username || `Добави ${platform} профил`}
-            </Text>
+            {editingPlatform === platform ? (
+              <View style={styles.socialLinkEdit}>
+                <TextInput
+                  value={socialLinkEditValue}
+                  onChangeText={(text) => {
+                    setSocialLinkEditValue(text);
+                    setSocialLinkValidationError(null);
+                  }}
+                  placeholder={info.placeholder}
+                  style={styles.socialLinkInput}
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                />
+                {socialLinkValidationError && (
+                  <Text style={styles.validationError}>{socialLinkValidationError}</Text>
+                )}
+                <View style={styles.socialLinkActions}>
+                  <IconButton
+                    icon="check"
+                    size={20}
+                    onPress={() => handleSocialLinkSave(platform)}
+                    style={styles.socialLinkButton}
+                  />
+                  <IconButton
+                    icon="close"
+                    size={20}
+                    onPress={() => {
+                      setEditingPlatform(null);
+                      setSocialLinkEditValue('');
+                      setSocialLinkValidationError(null);
+                    }}
+                    style={styles.socialLinkButton}
+                  />
+                </View>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={styles.socialLinkText}
+                onPress={() => isEditing && handleSocialLinkEdit(platform)}
+              >
+                <Text variant="bodyMedium" style={{ color: '#000000', fontSize: 16 }}>
+                  {userData.socialLinks[platform] 
+                    ? `${info.prefix}${userData.socialLinks[platform]}`
+                    : `Добави ${info.label} профил`}
+                </Text>
+                {isEditing && (
+                  <IconButton
+                    icon="pencil"
+                    size={16}
+                    onPress={() => handleSocialLinkEdit(platform)}
+                    style={styles.editIcon}
+                  />
+                )}
+              </TouchableOpacity>
+            )}
           </View>
         ))}
       </View>
@@ -655,50 +799,126 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
             color="#8A97FF"
           />
         </View>
+        <Divider style={{ backgroundColor: 'rgba(0, 0, 0, 0.1)', marginVertical: 12 }} />
+        <TouchableOpacity 
+          style={styles.logoutButton}
+          onPress={async () => {
+            try {
+              const { error } = await auth.signOut();
+              if (error) throw error;
+              navigation.replace('SignIn');
+            } catch (err) {
+              console.error('Error signing out:', err);
+              Alert.alert('Грешка', 'Възникна проблем при излизане от профила');
+            }
+          }}
+        >
+          <MaterialCommunityIcons name="logout" size={24} color="#FF5252" />
+          <Text variant="bodyMedium" style={{ color: '#FF5252', flex: 1, marginLeft: 12, fontSize: 16 }}>
+            Изход от профила
+          </Text>
+        </TouchableOpacity>
       </View>
     </Surface>
   );
 
-  if (loading) {
-    return (
-      <View style={[styles.container, styles.centered]}>
-        <ActivityIndicator size="large" color="#8A97FF" />
-      </View>
-    );
-  }
+  const renderSkeletonLoader = () => (
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      {/* Profile Header Skeleton */}
+      <Surface style={[styles.profileHeader, styles.skeletonContainer]}>
+        <View style={styles.profileAvatarContainer}>
+          <View style={[styles.skeletonCircle, { width: 90, height: 90, borderRadius: 45 }]} />
+          <View style={styles.profileInfo}>
+            <View style={[styles.skeletonText, { width: 150, height: 32 }]} />
+            <View style={[styles.skeletonText, { width: 200, height: 20, marginTop: 8 }]} />
+          </View>
+        </View>
+      </Surface>
+
+      {/* Stats Skeleton */}
+      <Surface style={[cardStyle, styles.skeletonContainer]}>
+        <View style={[styles.skeletonText, { width: 100, height: 24, marginBottom: 20 }]} />
+        <View style={styles.statsGrid}>
+          {[1, 2, 3, 4].map((_, index) => (
+            <View key={index} style={styles.statItem}>
+              <View style={[styles.skeletonCircle, { width: 28, height: 28 }]} />
+              <View style={[styles.skeletonText, { width: 40, height: 24, marginTop: 8 }]} />
+              <View style={[styles.skeletonText, { width: 60, height: 16, marginTop: 4 }]} />
+            </View>
+          ))}
+        </View>
+      </Surface>
+
+      {/* Progress Skeleton */}
+      <Surface style={[cardStyle, styles.skeletonContainer]}>
+        <View style={[styles.skeletonText, { width: 100, height: 24, marginBottom: 20 }]} />
+        <View style={[styles.skeletonText, { width: '100%', height: 8, borderRadius: 4 }]} />
+        <View style={[styles.skeletonText, { width: 150, height: 16, marginTop: 12 }]} />
+      </Surface>
+
+      {/* Achievements Skeleton */}
+      <Surface style={[cardStyle, styles.skeletonContainer]}>
+        <View style={[styles.skeletonText, { width: 120, height: 24, marginBottom: 20 }]} />
+        {[1, 2, 3].map((_, index) => (
+          <View key={index} style={styles.achievementContainer}>
+            <View style={[styles.skeletonCircle, { width: 28, height: 28 }]} />
+            <View style={styles.achievementInfo}>
+              <View style={[styles.skeletonText, { width: 120, height: 20 }]} />
+              <View style={[styles.skeletonText, { width: 200, height: 16, marginTop: 4 }]} />
+            </View>
+          </View>
+        ))}
+      </Surface>
+
+      {/* Settings Skeleton */}
+      <Surface style={[cardStyle, styles.skeletonContainer]}>
+        <View style={[styles.skeletonText, { width: 100, height: 24, marginBottom: 20 }]} />
+        {[1, 2, 3].map((_, index) => (
+          <View key={index} style={styles.settingItem}>
+            <View style={[styles.skeletonCircle, { width: 24, height: 24 }]} />
+            <View style={[styles.skeletonText, { width: 100, height: 20, marginLeft: 12 }]} />
+            <View style={[styles.skeletonCircle, { width: 40, height: 24, marginLeft: 'auto' }]} />
+          </View>
+        ))}
+      </Surface>
+    </Animated.View>
+  );
 
   if (error) {
     return (
       <View style={[styles.container, styles.centered]}>
-        <Text style={styles.errorText}>{error}</Text>
-        <Button mode="contained" onPress={checkAuthAndLoadData} style={{ marginTop: 16 }}>
+        <Text style={[styles.errorText, { color: colors.error }]}>{error}</Text>
+        <Button mode="contained" onPress={initializeProfile} style={{ marginTop: 16 }}>
           Retry
-        </Button>
-        <Button 
-          mode="outlined" 
-          onPress={() => navigation.replace('SignIn')} 
-          style={{ marginTop: 8 }}
-        >
-          Go to Sign In
         </Button>
       </View>
     );
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: '#F5F5F5' }]}>
+    <View style={styles.mainContainer}>
       <ScrollView 
-        style={styles.scrollView}
-        showsVerticalScrollIndicator={false}
+        style={[styles.container, { backgroundColor: colors.background }]}
         contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
       >
-        {renderProfileHeader()}
-        {renderUserStats()}
-        {renderProgress()}
-        {renderAchievements()}
-        {renderInterests()}
-        {renderSocialLinks()}
-        {renderActions()}
+        {loading ? (
+          renderSkeletonLoader()
+        ) : (
+          <Animated.View style={{ opacity: fadeAnim }}>
+            {isProfileReady && (
+              <>
+                {renderProfileHeader()}
+                {renderUserStats()}
+                {renderProgress()}
+                {renderAchievements()}
+                {renderInterests()}
+                {renderSocialLinks()}
+                {renderActions()}
+              </>
+            )}
+          </Animated.View>
+        )}
       </ScrollView>
 
       <Portal>
@@ -714,11 +934,27 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
               onChangeText={setEditValue}
               multiline={editField === 'interests' || editField === 'socialLinks'}
               numberOfLines={editField === 'interests' || editField === 'socialLinks' ? 4 : 1}
+              placeholder={editField === 'interests' ? 'Въведете интереси, разделени със запетаи' : ''}
             />
           </Dialog.Content>
           <Dialog.Actions>
             <Button onPress={() => setShowEditDialog(false)}>Отказ</Button>
             <Button onPress={handleSave}>Запази</Button>
+          </Dialog.Actions>
+        </Dialog>
+        
+        <Dialog
+          visible={showAvatarPicker}
+          onDismiss={() => setShowAvatarPicker(false)}
+          style={dialogStyle}
+        >
+          <Dialog.Title>Update Avatar</Dialog.Title>
+          <Dialog.Content>
+            <Text>Choose an option to update your avatar:</Text>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setShowAvatarPicker(false)}>Cancel</Button>
+            <Button onPress={handleAvatarUpload}>Upload Photo</Button>
           </Dialog.Actions>
         </Dialog>
       </Portal>
@@ -729,29 +965,32 @@ export default function ProfileScreen({ navigation }: ProfileScreenProps) {
         onPress={() => setIsEditing(!isEditing)}
       />
 
-      <BottomNavBar navigation={navigation} activeTab="profile" />
+      <BottomNavigationBar 
+        navigation={navigation}
+        activeTab={activeTab}
+      />
     </View>
   );
-}
+};
 
 const styles = StyleSheet.create({
+  mainContainer: {
+    flex: 1,
+    position: 'relative',
+  },
   container: {
     flex: 1,
-    backgroundColor: '#F5F5F5',
-  },
-  scrollView: {
-    flex: 1,
-    marginBottom: 80,
   },
   scrollContent: {
-    padding: 16,
-    paddingBottom: 32,
+    flexGrow: 1,
+    paddingBottom: Platform.OS === 'ios' ? 100 : 80, // Increased padding for bottom nav
   },
   profileHeader: {
     margin: 16,
     padding: 20,
     borderRadius: 16,
     elevation: 2,
+    backgroundColor: '#FFFFFF',
     ...Platform.select({
       ios: {
         shadowColor: '#000',
@@ -771,6 +1010,12 @@ const styles = StyleSheet.create({
   profileInfo: {
     flex: 1,
     marginLeft: 16,
+    marginRight: 8,
+  },
+  nameContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
   },
   profileName: {
     fontSize: 24,
@@ -845,7 +1090,7 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: 16,
-    bottom: 80,
+    bottom: Platform.OS === 'ios' ? 100 : 80, // Adjusted for bottom nav
     backgroundColor: '#8A97FF',
   },
   statsGrid: {
@@ -891,5 +1136,92 @@ const styles = StyleSheet.create({
     padding: 0,
     margin: 0,
     height: 32,
+    flex: 1,
   },
-}); 
+  achievementContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    width: '100%',
+  },
+  achievementInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  achievementTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  achievementDescription: {
+    fontSize: 14,
+    color: 'rgba(0, 0, 0, 0.6)',
+    marginTop: 4,
+  },
+  socialLinkEdit: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  socialLinkInput: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    height: 36,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+  },
+  socialLinkActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    marginTop: 8,
+  },
+  socialLinkButton: {
+    margin: 0,
+    marginLeft: 8,
+  },
+  socialLinkText: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginLeft: 12,
+  },
+  editIcon: {
+    margin: 0,
+    marginLeft: 8,
+  },
+  validationError: {
+    color: '#FF5252',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 4,
+  },
+  avatarImage: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+  },
+  skeletonContainer: {
+    backgroundColor: '#f5f5f5',
+    overflow: 'hidden',
+  },
+  skeletonCircle: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 14,
+  },
+  skeletonText: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 4,
+  },
+});
+
+export default ProfileScreen; 

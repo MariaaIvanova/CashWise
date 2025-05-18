@@ -1,16 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
-import { Text, Surface, useTheme, Button, ProgressBar, Badge, ActivityIndicator } from 'react-native-paper';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Animated, Dimensions } from 'react-native';
+import { Text, Button, Surface, ProgressBar, IconButton, Badge, useTheme } from 'react-native-paper';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { useTheme as useCustomTheme, THEME } from '../ThemeContext';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { RouteProp } from '@react-navigation/native';
+import { auth, database } from '../supabase';
 import { RootStackParamList } from '../AppNavigator';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
-import { auth, database, videoStorage } from '../supabase';
+import BottomNavigationBar from '../components/BottomNavigationBar';
+import { LinearGradient } from 'expo-linear-gradient';
 
-type HomeScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'Home'>;
-
-interface HomeScreenProps {
-  navigation: HomeScreenNavigationProp;
+interface QuizAttempt {
+  id: string;
+  user_id: string;
+  quiz_id: string;
+  score: number;
+  completed_at: string;
+  personality_type?: string;
 }
+
+type HomeScreenProps = {
+  navigation: NativeStackNavigationProp<RootStackParamList>;
+};
 
 interface Profile {
   id: string;
@@ -31,7 +42,7 @@ interface Lesson {
   description: string;
   progress: number;
   isPremium?: boolean;
-  icon: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
   topics: {
     title: string;
     content: string;
@@ -75,17 +86,169 @@ interface Topic {
   quiz?: Quiz;
 }
 
+type TabKey = 'home' | 'leaderboard' | 'calendar' | 'profile';
+
+const defaultLessons: Lesson[] = [
+  {
+    id: '1',
+    title: 'Основи на кредитирането',
+    description: 'Научете основните принципи на кредитирането и как да вземате информирани решения.',
+    progress: 0,
+    isPremium: false,
+    icon: 'credit-card-outline' as keyof typeof MaterialCommunityIcons.glyphMap,
+    topics: [
+      {
+        title: 'Как работят кредитите',
+        content: 'Кредитите са инструмент – полезен, но и опасен, ако не се използва правилно. Те позволяват да закупите нещо сега и да го изплатите постепенно, но внимавайте с лихвите и условията.',
+        image: 'https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80',
+        videoUrl: 'lesson1.mp4',
+        keyPoints: [
+          'Потребителски кредит – За по-малки покупки (телефон, уред). Обикновено до 10 000 лв. Погасява се на месечни вноски с лихва.',
+          'Ипотечен кредит – За закупуване на жилище. Елена сума (често над 100 000 лв.), дълъг срок (20–30 години). Изисква стабилен доход.',
+          'Бързи кредити – Достъпни, но с висока лихва. Подходящи само при крайна необходимост.',
+          'Лихва – Допълнителната сума, която плащате за използването на кредита.',
+          'Гратисен период – Време, през което не се изисква плащане на лихва.'
+        ]
+      }
+    ]
+  },
+  {
+    id: '2',
+    title: 'Какво означава да инвестираш?',
+    description: 'Научете за основните видове инвестиции и как да започнете да инвестирате разумно.',
+    progress: 0,
+    isPremium: false,
+    icon: 'chart-line' as keyof typeof MaterialCommunityIcons.glyphMap,
+    topics: [
+      {
+        title: 'Основи на инвестирането',
+        content: 'Инвестирането е процес на разполагане с пари с цел получаване на доход или печалба в бъдеще. В България има различни възможности за инвестиране, като всеки инвеститор трябва да разбира основните принципи и рискове.',
+        image: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80',
+        videoUrl: 'lesson7.mp4',
+        keyPoints: [
+          'Разнообразие от инвестиционни възможности',
+          'Връзка между риск и възвръщаемост',
+          'Важност на диверсификацията',
+          'Определяне на инвестиционни цели',
+          'Разбиране на инвестиционните инструменти'
+        ]
+      }
+    ]
+  },
+  {
+    id: '3',
+    title: 'ДДС в България',
+    description: 'Научете за данъка върху добавената стойност, кога се прилага и какви са ставките.',
+    progress: 0,
+    isPremium: false,
+    icon: 'cash-multiple' as keyof typeof MaterialCommunityIcons.glyphMap,
+    topics: [
+      {
+        title: 'ДДС в България – кога се прилага и какви са ставките',
+        content: 'Данъкът върху добавената стойност (ДДС) е косвен данък, който се начислява върху почти всички стоки и услуги в България. В момента основната ставка е 20%, като за някои стоки, като книги и ресторантьорски услуги, има намалена ставка от 9%.',
+        videoUrl: 'lesson3.mp4',
+        keyPoints: [
+          'Основна ставка на ДДС: 20%',
+          'Намалена ставка: 9% (за книги и ресторантьорски услуги)',
+          'Задължителна регистрация за фирми с оборот над 100 000 лв. от 2024 г.',
+          'ДДС се включва в крайната цена на стоките и услугите',
+          'Фирмите отчитат и превеждат ДДС към държавата'
+        ]
+      }
+    ]
+  },
+  {
+    id: '4',
+    title: 'Данък върху доходите на физическите лица',
+    description: 'Научете за ДДФЛ, как се изчислява и кога трябва да плащате.',
+    progress: 0,
+    isPremium: false,
+    icon: 'account-cash' as keyof typeof MaterialCommunityIcons.glyphMap,
+    topics: [
+      {
+        title: 'Данък върху доходите на физическите лица (ДДФЛ)',
+        content: 'Данъкът върху доходите на физическите лица (ДДФЛ) е основен директ данък, който се прилага върху доходите на физическите лица в България. От 2008 г. България има единна ставка от 10%, което я прави една от страните с най-ниски данъчни ставки в Европейския съюз.',
+        videoUrl: 'lesson4.mp4',
+        keyPoints: [
+          'Единна ставка на ДДФЛ: 10%',
+          'Прилага се върху трудови доходи, доходи от свободна практика, наеми и др.',
+          'Годишно данъчно приключване до 30 април',
+          'Възможност за данъчни облекчения и приспадане на разходи',
+          'Някои доходи са освободени от облагане'
+        ]
+      }
+    ]
+  },
+  {
+    id: '5',
+    title: 'Данък върху доходите на юридическите лица',
+    description: 'Научете за ДДЮЛ, как се изчислява и какви са задълженията на фирмите.',
+    progress: 0,
+    isPremium: false,
+    icon: 'office-building' as keyof typeof MaterialCommunityIcons.glyphMap,
+    topics: [
+      {
+        title: 'Данък върху доходите на юридическите лица (ДДЮЛ)',
+        content: 'Данъкът върху доходите на юридическите лица (ДДЮЛ) е основен данък, който се прилага върху печалбата на компаниите в България. От 2007 г. България има единна ставка от 10%, което я прави привлекателна дестинация за бизнес.',
+        videoUrl: 'lesson5.mp4',
+        keyPoints: [
+          'Единна ставка на ДДЮЛ: 10%',
+          'Прилага се върху облагаемата печалба',
+          'Месечни данъчни декларации и авансови вноски',
+          'Годишно приключване до 31 март',
+          'Възможност за данъчни облекчения и инвестиционни стимули'
+        ]
+      }
+    ]
+  },
+  {
+    id: '6',
+    title: 'Социално осигуряване',
+    description: 'Научете за системата на социално осигуряване в България и вашите права.',
+    progress: 0,
+    isPremium: false,
+    icon: 'shield-account' as keyof typeof MaterialCommunityIcons.glyphMap,
+    topics: [
+      {
+        title: 'Социално осигуряване в България',
+        content: 'Социалното осигуряване в България е система, която осигурява защита на гражданите при различни социални рискове като безработица, болест, майчинство, инвалидност и старост. Системата се финансира чрез задължителни осигуровки, които се плащат от работодателите и работниците.',
+        videoUrl: 'lesson6.mp4',
+        keyPoints: [
+          'Общ размер на осигуровките: 32.8%',
+          'Работодател: 18.92%',
+          'Работник: 13.88%',
+          'Минимална основа: 933 лв. (2024)',
+          'Максимална основа: 3000 лв. (2024)'
+        ]
+      }
+    ]
+  }
+];
+
+const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
+const STAT_PILL_WIDTH = (SCREEN_WIDTH - 48 - 12) / 2; // 48 for padding, 12 for gap
+
 const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
-  const { colors } = useTheme();
+  const { theme } = useCustomTheme();
+  const paperTheme = useTheme();
+  const colors = theme.colors || THEME.colors;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [fadeAnim] = useState(new Animated.Value(0));
   const [userName, setUserName] = useState('');
   const [userLevel, setUserLevel] = useState(0);
   const [userXP, setUserXP] = useState(0);
   const [streakDays, setStreakDays] = useState(0);
-  
+  const [lessons, setLessons] = useState<Lesson[]>(defaultLessons);
+  const [hasAttemptedTest, setHasAttemptedTest] = useState(false);
+  const [loadingAttempts, setLoadingAttempts] = useState(true);
+  const [activeTab, setActiveTab] = useState<TabKey>('home');
+  const [scrollY] = useState(new Animated.Value(0));
+
   useEffect(() => {
     loadUserData();
+    setLessons(defaultLessons);
+    setLoading(false);
   }, []);
 
   const loadUserData = async () => {
@@ -100,15 +263,21 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
         return;
       }
 
+      // Get profile data for XP and other info
       const { data: profile, error: profileError } = await database.getProfile(user.id);
       if (profileError) throw profileError;
+
+      // Get streak info separately
+      const { data: streakInfo, error: streakError } = await database.getStreakInfo(user.id);
+      if (streakError) throw streakError;
 
       if (profile) {
         const typedProfile = profile as Profile;
         setUserName(typedProfile.name || '');
         setUserLevel(Math.floor((typedProfile.xp || 0) / 1000));
         setUserXP(typedProfile.xp || 0);
-        setStreakDays(typedProfile.streak || 0);
+        // Use streak from streakInfo instead of profile
+        setStreakDays(streakInfo?.currentStreak || 0);
       }
     } catch (err) {
       console.error('Error loading user data:', err);
@@ -118,296 +287,262 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
     }
   };
 
-  // Mock data for lessons
-  const lessons: Lesson[] = [
-    {
-      id: '1',
-      title: 'Как работят кредитите',
-      description: 'Научете основните принципи на кредитирането, видовете кредити и как да изберете най-подходящия за вас.',
-      progress: 0.1,
-      isPremium: false,
-      icon: 'credit-card-outline',
-      topics: [
-        {
-          title: 'Как работят кредитите',
-          content: 'Кредитите са инструмент – полезен, но и опасен, ако не се използва правилно. Те позволяват да закупите нещо сега и да го изплатите постепенно, но внимавайте с лихвите и условията.',
-          image: 'https://images.unsplash.com/photo-1579621970563-ebec7560ff3e?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80',
-          videoUrl: videoStorage.getVideoUrl('lesson1/lesson1.mp4'),
-          keyPoints: [
-            'Потребителски кредит – За по-малки покупки (телефон, уред). Обикновено до 10 000 лв. Погасява се на месечни вноски с лихва.',
-            'Ипотечен кредит – За закупуване на жилище. Елена сума (често над 100 000 лв.), дълъг срок (20–30 години). Изисква стабилен доход.',
-            'Бързи кредити – Достъпни, но с висока лихва. Подходящи само при крайна необходимост.',
-            'Лихва – Допълнителната сума, която плащате за използването на кредита. Колкото по-ниска е лихвата, толкова по-изгоден е кредитът.',
-            'Гратисен период – Време, през което не се изисква плащане на лихва. Използвайте го разумно.'
-          ]
-        }
-      ]
-    },
-    {
-      id: '2',
-      title: 'Какво означава да инвестираш?',
-      description: 'Научете за основните видове инвестиции и как да започнете да инвестирате разумно.',
-      progress: 0,
-      icon: 'chart-line',
-      topics: [
-        {
-          title: 'Какво означава да инвестираш?',
-          content: 'Инвестицията е начин да увеличиш парите си, вместо просто да ги държиш. Има три основни вида:\n\nАкции – Купуваш малка част от дадена компания. Ако тя печели – печелиш и ти. Но има риск – ако се провали, губиш пари.\n\nОблигации – Като заем. Държавата или фирма ти "взема назаем" пари и ти плаща лихва. По-сигурно, но и по-малко печелившо.\n\nИмоти – Купуваш жилище или земя и печелиш от наем или препродажба. Изисква повече капитал.',
-          image: 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80',
-          videoUrl: 'https://tvjrolyteabegukldhln.supabase.co/storage/v1/object/sign/lesson-videos/lesson2/lesson2.mp4?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InN0b3JhZ2UtdXJsLXNpZ25pbmcta2V5XzI1ZjJhMzUyLTMxOTYtNGI5NS05ODUzLTI1NzFlZmUzOGZmZSJ9.eyJ1cmwiOiJsZXNzb24tdmlkZW9zL2xlc3NvbjIvbGVzc29uMi5tcDQiLCJpYXQiOjE3NDcyMDQ2NjYsImV4cCI6MTc3ODc0MDY2Nn0.azIK1w89Y_85ErkDky04D1raw2reTcE9K1KJS7-yXDE',
-          keyPoints: [
-            'Акции – Дял от компания с потенциал за печалба, но и риск от загуба',
-            'Облигации – По-сигурна инвестиция с фиксирана доходност',
-            'Имоти – Инвестиция в недвижима собственост за наем или препродажба'
-          ],
-          quiz: {
-            title: 'Основни видове инвестиции',
-            questions: [
-              {
-                question: 'Кои от следните твърдения са верни за инвестирането в имоти?',
-                type: 'multiple',
-                options: [
-                  'Изисква по-голям първоначален капитал',
-                  'Може да носи доход чрез наем',
-                  'Подходящо е само за краткосрочни вложения',
-                  'Позволява печалба при препродажба',
-                  'Носи по-висок риск от облигации, но и по-малък от акциите'
-                ],
-                correctAnswers: [0, 1, 3]
-              },
-              {
-                question: 'Какъв е основният риск при инвестирането в акции?',
-                type: 'single',
-                options: [
-                  'Да не получиш лихва',
-                  'Да загубиш пари, ако компанията се провали',
-                  'Да не намериш купувач за имота'
-                ],
-                correctAnswers: [1]
-              },
-              {
-                question: 'Кое твърдение е вярно за облигациите?',
-                type: 'single',
-                options: [
-                  'Генерират голяма печалба, но с висок риск',
-                  'Те са по-сигурни, но носят по-малка печалба',
-                  'Купуват се само от банки'
-                ],
-                correctAnswers: [1]
-              },
-              {
-                question: 'Какво може да се случи, ако компанията, в която си инвестирал чрез акции, започне да губи пари?',
-                type: 'single',
-                options: [
-                  'Ще получиш фиксирана лихва, независимо от резултатите',
-                  'Може да загубиш част или цялата си инвестиция',
-                  'Ще получиш по-високи дивиденти'
-                ],
-                correctAnswers: [1]
-              },
-              {
-                question: 'Какъв е основният източник на доход при инвестиция в имоти?',
-                type: 'single',
-                options: [
-                  'От дивиденти',
-                  'От наеми или препродажба',
-                  'От държавна субсидия'
-                ],
-                correctAnswers: [1]
-              },
-              {
-                question: 'Коя инвестиция обикновено се смята за най-сигурна?',
-                type: 'single',
-                options: [
-                  'Акции',
-                  'Облигации',
-                  'Имоти'
-                ],
-                correctAnswers: [1]
-              },
-              {
-                question: 'Коя от следните инвестиции гарантира висока и сигурна печалба?',
-                type: 'single',
-                options: [
-                  'Акции на известна компания',
-                  'Облигации с гарантирана лихва',
-                  'Нито една – всяка инвестиция носи риск'
-                ],
-                correctAnswers: [2]
-              },
-              {
-                question: 'Свържете ситуациите с правилния вид инвестиция:',
-                type: 'matching',
-                pairs: [
-                  {
-                    situation: 'Иван купува акции на технологична фирма и следи дали ще се покачат цените.',
-                    answer: 'Акции'
-                  },
-                  {
-                    situation: 'Мария дава пари на държавата и получава фиксирана лихва всяка година.',
-                    answer: 'Облигации'
-                  },
-                  {
-                    situation: 'Петър купува апартамент и го отдава под наем.',
-                    answer: 'Имоти'
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      ]
-    },
-    {
-      id: '3',
-      title: 'ДДС в България',
-      description: 'Научете кога се прилага ДДС, какви са ставките и как влияе на бизнеса и потребителите.',
-      progress: 0,
-      icon: 'percent-outline',
-      topics: [
-        {
-          title: 'Какво е ДДС и защо ни засяга?',
-          content: 'Данъкът върху добавената стойност (ДДС) е косвен данък, който се начислява върху почти всички стоки и услуги в България. В момента основната ставка е 20%, като за някои стоки, като книги и ресторантьорски услуги, има намалена ставка от 9%.\n\nКога се прилага ДДС?\nКогато пазаруваш в магазин, цената, която плащаш, вече включва ДДС. За фирмите, които надвишават определен годишен оборот (100 000 лв. от 2024 г.), регистрацията по ДДС е задължителна.\n\nКой го плаща?\nВъпреки че потребителят го плаща на касата, ДДС реално се отчита и превежда към държавата от фирмата-продавач. Тази система позволява прозрачност и контрол върху икономическите потоци.',
-          image: 'https://images.unsplash.com/photo-1450101499163-c8848c66ca85?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80',
-          videoUrl: 'https://tvjrolyteabegukldhln.supabase.co/storage/v1/object/sign/lesson-videos/lesson3/lesson3.mp4?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InN0b3JhZ2UtdXJsLXNpZ25pbmcta2V5XzI1ZjJhMzUyLTMxOTYtNGI5NS05ODUzLTI1NzFlZmUzOGZmZSJ9.eyJ1cmwiOiJsZXNzb24tdmlkZW9zL2xlc3NvbjMvbGVzc29uMy5tcDQiLCJpYXQiOjE3NDcyMDU1NTgsImV4cCI6MTc3ODc0MTU1OH0.4CJ-0N6G11U27agcDA8N41K3OwfhJGI8HSC06V986pw',
-          keyPoints: [
-            'ДДС е косвен данък върху стоки и услуги',
-            'Основна ставка 20%, намалена 9% за определени стоки',
-            'Задължителна регистрация при оборот над 100 000 лв.',
-            'Плаща се от потребителя, отчита се от фирмата'
-          ]
-        }
-      ]
-    },
-    {
-      id: '4',
-      title: 'Пенсионно осигуряване',
-      description: 'Планиране на пенсията и разбиране на пенсионните системи.',
-      progress: 0,
-      icon: 'account-group-outline',
-      topics: [
-        {
-          title: 'Пенсионни системи в България',
-          content: 'Българската пенсионна система се състои от три стълба: държавна, допълнителна и лична пенсия.',
-          image: 'https://images.unsplash.com/photo-1579621970795-87facc2f976d?ixlib=rb-1.2.1&auto=format&fit=crop&w=800&q=80',
-          keyPoints: [
-            'Първи стълб – Държавна пенсия, финансирана от задължителните осигуровки.',
-            'Втори стълб – Допълнителна пенсия, където работодателите могат да допринасят.',
-            'Трети стълб – Лична пенсия, където хората могат да спестяват допълнително.',
-            'Пенсионни фондове – Инвестиционни инструменти за дългосрочно спестяване.'
-          ]
-        }
-      ]
-    }
-  ];
+  const checkPreviousAttempts = async () => {
+    setLoadingAttempts(true);
+    try {
+      const { user, error: userError } = await auth.getCurrentUser();
+      if (userError) throw userError;
+      if (!user) {
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'SignIn' }],
+        });
+        return;
+      }
 
-  const [activeTab, setActiveTab] = useState('home');
-  
-  const tabs = [
-    { key: 'home', icon: 'home', label: 'Начало' },
-    { key: 'leaderboard', icon: 'trophy', label: 'Класация' },
-    { key: 'calendar', icon: 'calendar', label: 'Календар' },
-    { key: 'profile', icon: 'account', label: 'Профил' },
-  ];
+      // Check if user has already taken the personality test
+      const { data: attempts, error: attemptsError } = await database.getQuizAttempts(user.id);
+      if (attemptsError) throw attemptsError;
 
-  const handleTabPress = (tabKey: string) => {
-    setActiveTab(tabKey);
-    switch (tabKey) {
-      case 'home':
-        // Already on home
-        break;
-      case 'leaderboard':
-        navigation.navigate('Leaderboard');
-        break;
-      case 'calendar':
-        navigation.navigate('Calendar');
-        break;
-      case 'profile':
-        navigation.navigate('Profile');
-        break;
+      const hasAttempted = (attempts as QuizAttempt[] || []).some(
+        attempt => attempt.quiz_id === 'daily-challenge'
+      );
+      setHasAttemptedTest(hasAttempted);
+    } catch (err) {
+      console.error('Error checking previous attempts:', err);
+    } finally {
+      setLoadingAttempts(false);
     }
   };
 
-  const renderLessonCard = (lesson: Lesson) => (
-    <Surface 
-      key={lesson.id} 
-      style={[styles.lessonCard, { backgroundColor: '#fafafa' }]}
-      elevation={2}
-    >
-      <View style={styles.lessonHeader}>
-        <Icon 
-          name={lesson.icon} 
-          size={28} 
-          color={lesson.isPremium ? '#FFD700' : colors.primary} 
-        />
-        <View style={styles.lessonTitleContainer}>
-          <Text 
-            style={[
-              styles.lessonTitle, 
-              { 
-                color: lesson.isPremium ? '#FFD700' : colors.onSurface 
-              }
-            ]}
-          >
-            {lesson.title}
-          </Text>
-          {lesson.isPremium && (
-            <Badge style={styles.premiumBadge}>PREMIUM</Badge>
-          )}
+  useEffect(() => {
+    checkPreviousAttempts();
+  }, []);
+
+  useEffect(() => {
+    if (!loading && !error) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 500,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [loading, error]);
+
+  const renderHeroSection = () => (
+    <Animated.View style={[
+      styles.heroContainer,
+      {
+        transform: [{
+          translateY: scrollY.interpolate({
+            inputRange: [-100, 0, 100],
+            outputRange: [50, 0, -50],
+            extrapolate: 'clamp'
+          })
+        }]
+      }
+    ]}>
+      <LinearGradient
+        colors={['#4A5AE8', '#3A4AD8']}
+        style={styles.heroGradient}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+      >
+        <View style={styles.heroContent}>
+          <View style={styles.welcomeContainer}>
+            <Text style={styles.welcomeText}>
+              Здравей, {userName || 'Потребител'}!
+            </Text>
+            <Text style={styles.welcomeSubtext}>
+              Продължи към следващия си финансов успех
+            </Text>
+          </View>
+          
+          <View style={styles.statsContainer}>
+            <View style={styles.statsRow}>
+              <Surface style={[styles.statPill, { width: STAT_PILL_WIDTH }]}>
+                <MaterialCommunityIcons name="star" size={18} color="#FFD700" />
+                <View style={styles.statTextContainer}>
+                  <Text style={styles.statValue}>{userXP}</Text>
+                  <Text style={styles.statLabel}>XP</Text>
+                </View>
+              </Surface>
+              
+              <Surface style={[styles.statPill, { width: STAT_PILL_WIDTH }]}>
+                <MaterialCommunityIcons name="trophy" size={18} color="#FFD700" />
+                <View style={styles.statTextContainer}>
+                  <Text style={styles.statValue}>{userLevel}</Text>
+                  <Text style={styles.statLabel}>Ниво</Text>
+                </View>
+              </Surface>
+            </View>
+            
+            <Surface style={[styles.statPill, styles.streakPill]}>
+              <MaterialCommunityIcons name="fire" size={18} color="#FF6B6B" />
+              <View style={styles.statTextContainer}>
+                <Text style={styles.statValue}>{streakDays}</Text>
+                <Text style={styles.statLabel}>Поредни дни</Text>
+              </View>
+            </Surface>
+          </View>
         </View>
-      </View>
-      <Text style={[styles.lessonDescription, { color: colors.onSurfaceVariant }]}>
-        {lesson.description}
-      </Text>
-      <View style={styles.progressContainer}>
-        <View style={styles.progressBarWrapper}>
+      </LinearGradient>
+    </Animated.View>
+  );
+
+  const renderLessonCard = (lesson: Lesson) => (
+    <Animated.View
+      style={[
+        styles.lessonCardContainer,
+        {
+          opacity: fadeAnim,
+          transform: [{
+            scale: fadeAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: [0.95, 1]
+            })
+          }]
+        }
+      ]}
+    >
+      <Surface style={styles.lessonCard} elevation={2}>
+        <View style={styles.lessonHeader}>
+          <View style={[
+            styles.iconContainer,
+            { backgroundColor: lesson.isPremium ? '#FFD700' : colors.primary + '20' }
+          ]}>
+            <MaterialCommunityIcons 
+              name={lesson.icon} 
+              size={24} 
+              color={lesson.isPremium ? '#000' : colors.primary} 
+            />
+          </View>
+          <View style={styles.lessonTitleContainer}>
+            <Text style={styles.lessonTitle}>
+              {lesson.title}
+            </Text>
+            {lesson.isPremium && (
+              <Badge style={styles.premiumBadge}>Premium</Badge>
+            )}
+          </View>
+        </View>
+
+        <Text style={styles.lessonDescription}>
+          {lesson.description}
+        </Text>
+
+        <View style={styles.progressSection}>
+          <View style={styles.progressHeader}>
+            <Text style={styles.progressLabel}>Прогрес</Text>
+            <Text style={styles.progressPercentage}>
+              {Math.round(lesson.progress * 100)}%
+            </Text>
+          </View>
           <ProgressBar
             progress={lesson.progress}
             color={lesson.isPremium ? '#FFD700' : colors.primary}
             style={styles.progressBar}
           />
-          <View style={styles.percentageContainer}>
-            <Text style={[styles.percentageText, { 
-              color: '#ffffff',
-              textShadowColor: 'rgba(0, 0, 0, 0.75)',
-              textShadowOffset: { width: 0, height: 0 },
-              textShadowRadius: 2
-            }]}>
-              {Math.round(lesson.progress * 100)}%
-            </Text>
+        </View>
+
+        <View style={styles.buttonContainer}>
+          <Button 
+            mode="contained"
+            style={[
+              styles.actionButton,
+              lesson.isPremium && styles.premiumButton
+            ]}
+            labelStyle={styles.buttonLabel}
+            onPress={() => navigation.navigate('Lesson', { 
+              lessonId: lesson.id,
+              topic: lesson.title,
+              description: lesson.description,
+              topics: lesson.topics
+            })}
+          >
+            Започни урок
+          </Button>
+          
+          <Button 
+            mode="outlined"
+            style={[
+              styles.actionButton,
+              styles.quizButton,
+              lesson.isPremium && styles.premiumOutlinedButton
+            ]}
+            labelStyle={[
+              styles.buttonLabel,
+              lesson.isPremium && styles.premiumButtonLabel
+            ]}
+            onPress={() => {
+              if (lesson.id === 'daily-challenge' && hasAttemptedTest) {
+                Alert.alert(
+                  'Вече е изпълнено',
+                  'Вече сте направили този тест. Можете да видите резултатите си в профила си.'
+                );
+                return;
+              }
+              navigation.navigate('Quiz', { lessonId: lesson.id });
+            }}
+          >
+            Тест
+          </Button>
+        </View>
+      </Surface>
+    </Animated.View>
+  );
+
+  const renderSkeletonLoader = () => (
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      {/* User Stats Skeleton */}
+      <Surface style={[styles.userStatsContainer, styles.skeletonContainer]}>
+        <View style={styles.skeletonUserInfo}>
+          <View style={[styles.skeletonCircle, { width: 60, height: 60, borderRadius: 30 }]} />
+          <View style={styles.skeletonTextContainer}>
+            <View style={[styles.skeletonText, { width: 150, height: 24 }]} />
+            <View style={[styles.skeletonText, { width: 100, height: 16, marginTop: 8 }]} />
           </View>
         </View>
-      </View>
-      <View style={styles.buttonContainer}>
-        <Button 
-          mode="outlined" 
-          style={[
-            styles.lessonButton, 
-            lesson.isPremium && { backgroundColor: '#FFD700', borderColor: '#FFD700'}
-          ]}
-          textColor={lesson.isPremium ? '#fff' : colors.primary}
-          onPress={() => navigation.navigate('Lesson', { 
-            lessonId: lesson.id,
-            topic: lesson.title,
-            description: lesson.description,
-            topics: lesson.topics
-          })}
-        >
-          Уроци
-        </Button>
-        <Button 
-          mode="outlined" 
-          style={[
-            styles.lessonButton,
-            lesson.isPremium && { backgroundColor: '#FFD700', borderColor: '#FFD700' }
-          ]}
-          textColor={lesson.isPremium ? '#fff' : colors.primary}
-          onPress={() => navigation.navigate('Quiz', { lessonId: lesson.id })}
-        >
-          Тест
-        </Button>
-      </View>
-    </Surface>
+        <View style={styles.skeletonStats}>
+          <View style={styles.skeletonStatItem}>
+            <View style={[styles.skeletonCircle, { width: 32, height: 32 }]} />
+            <View style={[styles.skeletonText, { width: 40, height: 20, marginTop: 4 }]} />
+          </View>
+          <View style={styles.skeletonStatItem}>
+            <View style={[styles.skeletonCircle, { width: 32, height: 32 }]} />
+            <View style={[styles.skeletonText, { width: 40, height: 20, marginTop: 4 }]} />
+          </View>
+        </View>
+      </Surface>
+
+      {/* Progress Skeleton */}
+      <Surface style={[styles.progressSection, styles.skeletonContainer]}>
+        <View style={[styles.skeletonText, { width: 120, height: 20, marginBottom: 16 }]} />
+        <View style={[styles.skeletonText, { width: '100%', height: 8, borderRadius: 4 }]} />
+        <View style={[styles.skeletonText, { width: 100, height: 16, marginTop: 8 }]} />
+      </Surface>
+
+      {/* Lessons Skeleton */}
+      {[1, 2, 3].map((_, index) => (
+        <Surface key={index} style={[styles.lessonCard, styles.skeletonContainer]}>
+          <View style={styles.skeletonLessonHeader}>
+            <View style={[styles.skeletonCircle, { width: 40, height: 40 }]} />
+            <View style={styles.skeletonLessonInfo}>
+              <View style={[styles.skeletonText, { width: 200, height: 20 }]} />
+              <View style={[styles.skeletonText, { width: 250, height: 16, marginTop: 8 }]} />
+            </View>
+          </View>
+          <View style={styles.skeletonProgress}>
+            <View style={[styles.skeletonText, { width: '100%', height: 4, borderRadius: 2 }]} />
+            <View style={[styles.skeletonText, { width: 80, height: 16, marginTop: 8 }]} />
+          </View>
+          <View style={styles.skeletonButtons}>
+            <View style={[styles.skeletonButton, { width: 100, height: 36 }]} />
+            <View style={[styles.skeletonButton, { width: 100, height: 36 }]} />
+          </View>
+        </Surface>
+      ))}
+    </Animated.View>
   );
 
   if (loading) {
@@ -431,91 +566,86 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
 
   return (
     <View style={styles.mainContainer}>
-      <ScrollView 
-        style={[styles.container, { backgroundColor: '#efefef' }]}
+      <Animated.ScrollView 
+        style={styles.container}
         contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: true }
+        )}
+        scrollEventThrottle={16}
       >
-        {/* User profile section */}
-        <View style={styles.profileSection}>
-          <View style={styles.userInfo}>
-            <Text style={[styles.userName, { color: colors.onSurface }]}>
-              Здравей, {userName || 'Потребител'}!
-            </Text>
-            <Text style={[styles.userStatus, { color: colors.onSurfaceVariant }]}>
-              Начинаещ
-            </Text>
-          </View>
-          <View style={styles.badgesContainer}>
-            <View style={[styles.badge, { backgroundColor: 'rgba(0, 122, 255, 0.1)' }]}>
-              <Icon name="star" size={16} color={colors.primary} />
-              <Text style={[styles.badgeText, { color: colors.primary }]}>
-                XP: {userXP}
-              </Text>
-            </View>
-            <View style={[styles.badge, { backgroundColor: 'rgba(0, 122, 255, 0.1)' }]}>
-              <Icon name="trophy" size={16} color={colors.primary} />
-              <Text style={[styles.badgeText, { color: colors.primary }]}>
-                Level: {userLevel}
-              </Text>
-            </View>
-          </View>
-        </View>
+        {loading ? (
+          renderSkeletonLoader()
+        ) : (
+          <>
+            {renderHeroSection()}
+            
+            <Surface style={styles.challengesSection}>
+              <LinearGradient
+                colors={['#4A5AE8', '#3A4AD8']}
+                style={styles.challengesContent}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+              >
+                <View style={styles.challengesInnerContent}>
+                  <View style={styles.challengesHeader}>
+                    <View style={styles.challengesIconContainer}>
+                      <MaterialCommunityIcons name="flag-checkered" size={24} color="#FF6B6B" />
+                    </View>
+                    <Text style={styles.challengesTitle}>Ежедневни предизвикателства</Text>
+                  </View>
+                  <Text style={styles.challengesDescription}>
+                    Участвайте в ежедневни предизвикателства и печелете допълнителни точки
+                  </Text>
+                  <TouchableOpacity 
+                    style={styles.challengesButton}
+                    onPress={() => navigation.navigate('Challenges')}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.challengesButtonInner}>
+                      <Text style={styles.challengesButtonText}>Започнете сега</Text>
+                      <MaterialCommunityIcons name="arrow-right" size={20} color="#FFFFFF" />
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              </LinearGradient>
+            </Surface>
 
-        {/* Daily challenge card */}
-        <Surface 
-          style={[styles.challengeCard, { backgroundColor: '#fafafa' }]}
-          elevation={2}
-        >
-          <Text style={[styles.challengeTitle, { color: colors.onSurface }]}>
-            Дневно предизвикателство
-          </Text>
-          <Text style={[styles.challengeDescription, { color: colors.onSurfaceVariant }]}>
-            Изпълнете днешното предизвикателство, за да тествате финансовите си познания и да поддържате серията си.
-          </Text>
-          <View style={styles.challengeFooter}>
-            <View style={styles.streakContainer}>
-              <Icon name="fire" size={20} color="#FF6B00" />
-              <Text style={[styles.streakText, { color: '#FF6B00' }]}>
-                {streakDays} дни серия
+            <View style={styles.lessonsSection}>
+              <Text style={styles.sectionTitle}>
+                Финансово образование
               </Text>
+              <Text style={styles.sectionSubtitle}>
+                Изберете урок, който искате да изучавате
+              </Text>
+              
+              {lessons.map((lesson, index) => (
+                <Animated.View
+                  key={lesson.id}
+                  style={{
+                    opacity: fadeAnim,
+                    transform: [{
+                      translateY: fadeAnim.interpolate({
+                        inputRange: [0, 1],
+                        outputRange: [50, 0]
+                      })
+                    }]
+                  }}
+                >
+                  {renderLessonCard(lesson)}
+                </Animated.View>
+              ))}
             </View>
-            <Button 
-              mode="contained" 
-              onPress={() => {}}
-              style={{ backgroundColor: colors.primary }}
-            >
-              Започни предизвикателство
-            </Button>
-          </View>
-        </Surface>
+          </>
+        )}
+      </Animated.ScrollView>
 
-        {/* Financial education section */}
-        <View style={styles.educationSection}>
-          <Text style={[styles.sectionTitle, { color: colors.onSurface }]}>
-            Финансово образование
-          </Text>
-          {lessons.map(renderLessonCard)}
-        </View>
-      </ScrollView>
-
-      <View style={styles.bottomNav}>
-        {tabs.map((tab) => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[
-              styles.tabItem,
-              activeTab === tab.key && styles.activeTabItem
-            ]}
-            onPress={() => handleTabPress(tab.key)}
-          >
-            <Icon
-              name={activeTab === tab.key ? tab.icon : `${tab.icon}-outline`}
-              size={24}
-              color={activeTab === tab.key ? colors.primary : '#FFFFFF'}
-            />
-          </TouchableOpacity>
-        ))}
-      </View>
+      <BottomNavigationBar 
+        navigation={navigation}
+        activeTab={activeTab}
+      />
     </View>
   );
 };
@@ -523,115 +653,127 @@ const HomeScreen: React.FC<HomeScreenProps> = ({ navigation }) => {
 const styles = StyleSheet.create({
   mainContainer: {
     flex: 1,
-    position: 'relative',
+    backgroundColor: '#F8F9FE',
   },
   container: {
     flex: 1,
-    padding: 16,
   },
   scrollContent: {
-    paddingBottom: 60,
+    paddingBottom: 100,
   },
-  bottomNav: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: 60,
-    flexDirection: 'row',
-    backgroundColor: '#1B2541',
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.1)',
-    elevation: 8,
+  heroContainer: {
+    height: 200, // Adjusted to account for all content + padding
+    marginBottom: 24,
+    overflow: 'hidden', // Ensure content doesn't overflow
   },
-  tabItem: {
+  heroGradient: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    height: 60,
-  },
-  activeTabItem: {
-    backgroundColor: 'rgba(90, 102, 196, 0.1)',
-  },
-  profileSection: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  userInfo: {
-    flex: 1,
-  },
-  userName: {
-    fontSize: 24,
-    fontWeight: 'bold',
-  },
-  userStatus: {
-    fontSize: 16,
-  },
-  badgesContainer: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 20,
-    gap: 4,
-  },
-  badgeText: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  challengeCard: {
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
     padding: 16,
-    borderRadius: 12,
-    marginBottom: 20,
   },
-  challengeTitle: {
-    fontSize: 20,
+  heroContent: {
+    flex: 1,
+    justifyContent: 'space-between',
+    minHeight: 0, // Important: allows content to shrink within flex container
+  },
+  welcomeContainer: {
+    marginBottom: 12, // Reduced to fit better
+  },
+  welcomeText: {
+    fontSize: 24, // Slightly reduced
     fontWeight: 'bold',
-    marginBottom: 8,
+    color: '#FFFFFF',
+    marginBottom: 4,
+    textShadowColor: 'rgba(0, 0, 0, 0.1)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
-  challengeDescription: {
-    fontSize: 16,
-    marginBottom: 16,
+  welcomeSubtext: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    textShadowColor: 'rgba(0, 0, 0, 0.1)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
   },
-  challengeFooter: {
+  statsContainer: {
+    gap: 8,
+    width: '100%',
+    paddingTop: 4,
+  },
+  statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    gap: 12,
+    width: '100%',
   },
-  streakContainer: {
+  statPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    padding: 10,
+    borderRadius: 16,
+    gap: 8,
+    height: 40,
+    flex: 1,
   },
-  streakText: {
+  streakPill: {
+    backgroundColor: 'rgba(255, 107, 107, 0.12)',
+  },
+  statTextContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    flex: 1,
+  },
+  statValue: {
     fontSize: 16,
-    fontWeight: '600',
+    fontFamily: 'System',
+    fontWeight: '500',
+    color: '#FFFFFF',
   },
-  educationSection: {
-    marginTop: 20,
-    marginBottom: 0,
+  statLabel: {
+    fontSize: 13,
+    fontFamily: 'System',
+    fontWeight: '500',
+    color: 'rgba(255, 255, 255, 0.9)',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  lessonsSection: {
+    padding: 24,
   },
   sectionTitle: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: 'bold',
+    color: '#1A1A1A',
+    marginBottom: 8,
+  },
+  sectionSubtitle: {
+    fontSize: 16,
+    color: '#666666',
+    marginBottom: 24,
+  },
+  lessonCardContainer: {
     marginBottom: 16,
   },
   lessonCard: {
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 16,
+    borderRadius: 16,
+    padding: 20,
+    backgroundColor: '#FFFFFF',
   },
   lessonHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
-    gap: 12,
+    marginBottom: 16,
+  },
+  iconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 16,
   },
   lessonTitleContainer: {
     flex: 1,
@@ -639,54 +781,72 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
-  premiumBadge: {
-    backgroundColor: '#FFD700',
-    color: '#fff',
-    fontSize: 10,
-    paddingHorizontal: 8,
-  },
   lessonTitle: {
     fontSize: 18,
     fontWeight: 'bold',
+    color: '#1A1A1A',
+    flex: 1,
+  },
+  premiumBadge: {
+    backgroundColor: '#FFD700',
+    color: '#000000',
+    fontSize: 12,
+    paddingHorizontal: 8,
   },
   lessonDescription: {
     fontSize: 14,
-    marginBottom: 16,
+    color: '#666666',
     lineHeight: 20,
+    marginBottom: 20,
   },
-  progressContainer: {
-    marginBottom: 16,
+  progressSection: {
+    marginBottom: 20,
   },
-  progressBarWrapper: {
-    position: 'relative',
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: 'rgba(0,0,0,0.05)',
-    overflow: 'hidden',
+  progressHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  progressLabel: {
+    fontSize: 14,
+    color: '#666666',
+  },
+  progressPercentage: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1A1A1A',
   },
   progressBar: {
-    height: '100%',
-    borderRadius: 12,
-  },
-  percentageContainer: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  percentageText: {
-    fontSize: 12,
-    fontWeight: 'bold',
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
   },
   buttonContainer: {
     flexDirection: 'row',
     gap: 12,
   },
-  lessonButton: {
+  actionButton: {
     flex: 1,
+    borderRadius: 12,
+    height: 48,
+    justifyContent: 'center',
+  },
+  buttonLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  premiumButton: {
+    backgroundColor: '#FFD700',
+  },
+  premiumOutlinedButton: {
+    borderColor: '#FFD700',
+  },
+  premiumButtonLabel: {
+    color: '#FFD700',
+  },
+  quizButton: {
+    borderWidth: 1.5,
   },
   centered: {
     justifyContent: 'center',
@@ -696,6 +856,141 @@ const styles = StyleSheet.create({
     color: 'red',
     textAlign: 'center',
     marginHorizontal: 20,
+  },
+  userStatsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+  },
+  skeletonContainer: {
+    backgroundColor: '#f5f5f5',
+    overflow: 'hidden',
+  },
+  skeletonUserInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  skeletonTextContainer: {
+    marginLeft: 16,
+    flex: 1,
+  },
+  skeletonStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0, 0, 0, 0.1)',
+    paddingTop: 16,
+  },
+  skeletonStatItem: {
+    alignItems: 'center',
+  },
+  skeletonCircle: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 16,
+  },
+  skeletonText: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 4,
+  },
+  skeletonLessonHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  skeletonLessonInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  skeletonProgress: {
+    marginBottom: 16,
+  },
+  skeletonButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  skeletonButton: {
+    backgroundColor: '#e0e0e0',
+    borderRadius: 12,
+    height: 36,
+    flex: 1,
+  },
+  challengesSection: {
+    marginHorizontal: 24,
+    marginBottom: 24,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    overflow: 'hidden',
+  },
+  challengesContent: {
+    width: '100%',
+  },
+  challengesInnerContent: {
+    padding: 24,
+    height: '100%',
+  },
+  challengesHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 12,
+  },
+  challengesIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  challengesTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0, 0, 0, 0.1)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 2,
+  },
+  challengesDescription: {
+    fontSize: 15,
+    color: 'rgba(255, 255, 255, 0.95)',
+    marginBottom: 24,
+    lineHeight: 22,
+  },
+  challengesButton: {
+    backgroundColor: '#FF6B6B',
+    borderRadius: 16,
+    height: 48,
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    overflow: 'hidden',
+  },
+  challengesButtonInner: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  challengesButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+    letterSpacing: 0.3,
   },
 });
 

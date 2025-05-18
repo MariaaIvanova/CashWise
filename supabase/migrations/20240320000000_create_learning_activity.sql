@@ -8,8 +8,7 @@ CREATE TABLE IF NOT EXISTS learning_activity (
     quiz_id TEXT,
     xp_earned INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
-    UNIQUE(user_id, activity_date, activity_type, lesson_id, quiz_id)
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
 -- Create index for faster queries

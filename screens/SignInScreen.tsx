@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, Image, TouchableOpacity, TextInput, ViewStyle, TextStyle, ImageStyle, StyleProp, Text, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, Image, TouchableOpacity, TextInput, ViewStyle, TextStyle, ImageStyle, StyleProp, Text, Alert, ActivityIndicator, Platform, Linking } from 'react-native';
 import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useTheme, THEME } from '../ThemeContext';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -83,24 +83,62 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
       setLoading(true);
       setError('');
 
-      console.log('Attempting Google sign in...');
-      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
-        provider: 'google'
+      // Get the Supabase project URL
+      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      const redirectUrl = Platform.OS === 'web' 
+        ? window.location.origin  // For web testing
+        : `${supabaseUrl}/auth/v1/callback`;  // For native app - using Supabase callback URL
+
+      console.log('Starting Google sign in process:', {
+        platform: Platform.OS,
+        redirectUrl,
+        supabaseUrl,
+        currentUrl: Platform.OS === 'web' ? window.location.href : 'native app'
       });
 
-      console.log('Google sign in result:', {
+      const { data, error: signInError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUrl,
+          skipBrowserRedirect: Platform.OS !== 'web'  // Only skip for native
+        }
+      });
+
+      console.log('Google sign in response:', {
         success: !!data,
-        error: signInError ? signInError.message : null
+        hasUrl: !!data?.url,
+        error: signInError ? {
+          message: signInError.message,
+          status: signInError.status,
+          name: signInError.name
+        } : null,
+        platform: Platform.OS
       });
 
       if (signInError) {
         throw signInError;
       }
 
-      // Note: OAuth sign in will open a browser window
-      // The navigation will happen after the user completes the OAuth flow
+      if (data?.url && Platform.OS !== 'web') {
+        console.log('Attempting to open auth URL in browser:', data.url);
+        const supported = await Linking.canOpenURL(data.url);
+        if (supported) {
+          await Linking.openURL(data.url);
+          console.log('Successfully opened auth URL in browser');
+        } else {
+          console.error('Cannot open URL:', data.url);
+          Alert.alert('Error', 'Cannot open authentication URL');
+        }
+      } else if (Platform.OS === 'web') {
+        console.log('Web platform - browser will handle redirect automatically');
+      }
     } catch (err) {
-      console.error('Google sign in error:', err);
+      console.error('Google sign in error:', {
+        error: err,
+        message: err instanceof Error ? err.message : 'Unknown error',
+        name: err instanceof Error ? err.name : 'Unknown',
+        platform: Platform.OS
+      });
       setError('Грешка при влизане с Google');
       Alert.alert('Грешка', 'Грешка при влизане с Google');
     } finally {

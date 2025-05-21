@@ -4,6 +4,7 @@ import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useTheme, THEME } from '../ThemeContext';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { auth, supabase, database } from '../supabase';
+import Constants from 'expo-constants';
 
 // Define the navigation param list type
 type RootStackParamList = {
@@ -41,7 +42,7 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       lowercase: /[a-z]/.test(password),
       uppercase: /[A-Z]/.test(password),
       number: /[0-9]/.test(password),
-      minLength: password.length >= 6
+      minLength: password.length >= 8
     });
   }, [password]);
 
@@ -50,14 +51,14 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       lowercase: /[a-z]/.test(pass),
       uppercase: /[A-Z]/.test(pass),
       number: /[0-9]/.test(pass),
-      minLength: pass.length >= 6
+      minLength: pass.length >= 8
     };
 
     const missingRequirements = [];
     if (!requirements.lowercase) missingRequirements.push('Паролата трябва да съдържа поне една малка буква');
     if (!requirements.uppercase) missingRequirements.push('Паролата трябва да съдържа поне една главна буква');
     if (!requirements.number) missingRequirements.push('Паролата трябва да съдържа поне една цифра');
-    if (!requirements.minLength) missingRequirements.push('Паролата трябва да е поне 6 символа');
+    if (!requirements.minLength) missingRequirements.push('Паролата трябва да е поне 8 символа');
 
     return missingRequirements.length > 0 ? missingRequirements.join('\n') : null;
   };
@@ -173,18 +174,8 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
         // Set loading to false before navigation
         setLoading(false);
 
-        // Force a hard reload after a short delay to ensure profile is created
-        if (Platform.OS === 'web') {
-          setTimeout(() => {
-            // Clear any stored data
-            localStorage.clear();
-            sessionStorage.clear();
-            // Force a complete reload
-            window.location.replace('/');
-          }, 500);
-        } else {
-          navigation.replace('Invitation', { userId: user.id });
-        }
+        // After successful registration and profile creation, navigate to Home
+        navigation.replace('Home');
         return;
       } catch (err) {
         console.error('Profile operation error details:', {
@@ -235,8 +226,12 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       setLoading(true);
       setError('');
 
-      // Get the Supabase project URL
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      // Get the Supabase project URL from Constants
+      const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+      if (!supabaseUrl) {
+        throw new Error('Supabase URL not configured');
+      }
+
       const redirectUrl = Platform.OS === 'web' 
         ? window.location.origin  // For web testing
         : `${supabaseUrl}/auth/v1/callback`;  // For native app - using Supabase callback URL
@@ -364,7 +359,7 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
               styles.requirementText,
               passwordRequirements.minLength && styles.requirementMet
             ]}>
-              Минимум 6 символа
+              Минимум 8 символа
             </Text>
           </View>
 

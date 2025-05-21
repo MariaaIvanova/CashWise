@@ -310,39 +310,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Create function to create initial user achievements
-CREATE OR REPLACE FUNCTION create_initial_user_achievements()
-RETURNS TRIGGER AS $$
-DECLARE
-    has_is_initial BOOLEAN;
-BEGIN
-    -- Check if the is_initial column exists in the achievements table
-    SELECT EXISTS (
-        SELECT 1 
-        FROM information_schema.columns 
-        WHERE table_name = 'achievements' 
-        AND column_name = 'is_initial'
-    ) INTO has_is_initial;
-
-    -- If the column exists, use it to filter achievements
-    IF has_is_initial THEN
-        INSERT INTO user_achievements (user_id, achievement_id)
-        SELECT NEW.id, id
-        FROM achievements
-        WHERE is_initial = true
-        ON CONFLICT DO NOTHING;
-    ELSE
-        -- If the column doesn't exist, just insert all achievements
-        INSERT INTO user_achievements (user_id, achievement_id)
-        SELECT NEW.id, id
-        FROM achievements
-        ON CONFLICT DO NOTHING;
-    END IF;
-    
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
 -- Create function to create initial user progress
 CREATE OR REPLACE FUNCTION create_initial_user_progress()
 RETURNS TRIGGER AS $$
@@ -361,11 +328,6 @@ CREATE TRIGGER create_user_settings
     AFTER INSERT ON profiles
     FOR EACH ROW
     EXECUTE FUNCTION create_initial_user_settings();
-
-CREATE TRIGGER create_user_achievements
-    AFTER INSERT ON profiles
-    FOR EACH ROW
-    EXECUTE FUNCTION create_initial_user_achievements();
 
 CREATE TRIGGER create_user_progress
     AFTER INSERT ON profiles

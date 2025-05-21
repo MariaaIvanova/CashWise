@@ -23,6 +23,7 @@ import { useTheme, Button as PaperButton } from 'react-native-paper';
 import { auth, database } from '../supabase';
 import { FinancialPersonalityTest } from '../components/FinancialPersonalityTest';
 import Animated, { useSharedValue, withSpring } from 'react-native-reanimated';
+import { EMAILJS_CONFIG } from '../config';
 
 interface QuizAttempt {
   id: string;
@@ -53,6 +54,26 @@ interface TestResult {
   color: string;
 }
 
+interface ProfileData {
+  xp: number;
+  streak: number;
+}
+
+interface Profile {
+  id: string;
+  name: string;
+  avatar_url: string | null;
+  age?: number;
+  interests?: string[];
+  social_links: { [key: string]: string };
+  xp: number;
+  streak: number;
+  completed_lessons: number;
+  completed_quizzes: number;
+  created_at: string;
+  updated_at: string;
+}
+
 const ChallengesScreen = () => {
   const navigation = useNavigation<NavigationProp>();
   const [challenges, setChallenges] = useState<Challenge[]>([]);
@@ -64,8 +85,11 @@ const ChallengesScreen = () => {
   const [showTestModal, setShowTestModal] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
   const slideAnim = useSharedValue(0);
+  const [isInviting, setIsInviting] = useState(false);
+  const [lastInviteTime, setLastInviteTime] = useState(0);
+  const INVITE_COOLDOWN = 2000; // 2 seconds cooldown between invites
 
-  const updateUserXP = async (xpAmount: number) => {
+  const updateUserXP = async (xpAmount: number, challengeId?: number): Promise<boolean> => {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
@@ -73,7 +97,41 @@ const ChallengesScreen = () => {
         return false;
       }
 
-      // First get current XP and streak
+      // If challengeId is provided, use the new complete_challenge function
+      if (challengeId) {
+        try {
+          await supabase.rpc('complete_challenge', {
+            p_user_id: user.id,
+            p_challenge_id: challengeId,
+            p_xp_amount: xpAmount
+          });
+
+          // Get updated profile to show correct XP and streak
+          const { data: profile, error: profileError } = await supabase
+            .from('profiles')
+            .select('xp, streak')
+            .eq('id', user.id)
+            .single();
+
+          if (profileError) throw profileError;
+
+          const typedProfile = profile as ProfileData;
+
+          Alert.alert(
+            'Успех!', 
+            `Поздравления! Спечелихте ${xpAmount} XP!\nТекуща серия: ${typedProfile.streak} дни`
+          );
+          return true;
+        } catch (error: any) {
+          if (error.message === 'Challenge already completed today') {
+            Alert.alert('Вече изпълнено', 'Вече сте получили XP за това предизвикателство днес.');
+            return false;
+          }
+          throw error;
+        }
+      }
+
+      // For non-challenge XP updates (legacy support)
       const { data: profile, error: fetchError } = await supabase
         .from('profiles')
         .select('xp, streak')
@@ -82,38 +140,30 @@ const ChallengesScreen = () => {
 
       if (fetchError) throw fetchError;
 
+      const typedProfile = profile as ProfileData;
       const today = new Date().toISOString().split('T')[0];
       
       // Calculate new streak (simplified version)
-      let newStreak = (profile?.streak || 0) + 1;
+      let newStreak = (typedProfile?.streak || 0) + 1;
 
       // Update XP and streak
-      const newXP = (profile?.xp || 0) + xpAmount;
       const { error: updateError } = await supabase
         .from('profiles')
         .update({ 
-          xp: newXP,
+          xp: (typedProfile?.xp || 0) + xpAmount,
           streak: newStreak,
-          last_activity_date: today
+          updated_at: new Date().toISOString()
         })
         .eq('id', user.id);
 
-      if (updateError) {
-        // If update fails due to last_activity_date, try without it
-        if (updateError.code === '42703') {
-          const { error: retryError } = await supabase
-            .from('profiles')
-            .update({ 
-              xp: newXP,
-              streak: newStreak
-            })
-            .eq('id', user.id);
-          
-          if (retryError) throw retryError;
-        } else {
-          throw updateError;
-        }
-      }
+      if (updateError) throw updateError;
+
+      // Record learning activity
+      await database.addLearningActivity({
+        user_id: user.id,
+        activity_type: 'other',
+        xp_earned: xpAmount
+      });
 
       Alert.alert(
         'Успех!', 
@@ -152,6 +202,27 @@ const ChallengesScreen = () => {
       if (!user) return false;
 
       const today = new Date().toISOString().split('T')[0];
+      
+      // First check if already completed
+      const { data: existing } = await supabase
+        .from('completed_challenges')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('challenge_id', challengeId)
+        .eq('completed_date', today)
+        .maybeSingle();
+
+      if (existing) {
+        // Already completed, just update UI
+        setChallenges(prev =>
+          prev.map(c =>
+            c.id === challengeId ? { ...c, completed: true } : c
+          )
+        );
+        return true;
+      }
+
+      // Not completed, insert new record
       const { error } = await supabase
         .from('completed_challenges')
         .insert({
@@ -160,7 +231,18 @@ const ChallengesScreen = () => {
           completed_date: today
         });
 
-      if (error) throw error;
+      if (error) {
+        // If it's a duplicate key error, just update UI
+        if (error.code === '23505') {
+          setChallenges(prev =>
+            prev.map(c =>
+              c.id === challengeId ? { ...c, completed: true } : c
+            )
+          );
+          return true;
+        }
+        throw error;
+      }
 
       // Update local state
       setChallenges(prev =>
@@ -177,53 +259,82 @@ const ChallengesScreen = () => {
 
   const handleInviteFriend = async () => {
     try {
+      // Check cooldown
+      const now = Date.now();
+      if (now - lastInviteTime < INVITE_COOLDOWN) {
+        Alert.alert('Моля, изчакайте', 'Трябва да изчакате малко преди да изпратите нова покана.');
+        return;
+      }
+
+      // Validate email
+      if (!inviteEmail || !inviteEmail.includes('@')) {
+        Alert.alert('Грешка', 'Моля, въведете валиден имейл адрес.');
+        return;
+      }
+
+      setIsInviting(true);
+      setLastInviteTime(now);
+
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
-        Alert.alert('Error', 'Please sign in to invite friends');
+        Alert.alert('Грешка', 'Моля, влезте в профила си, за да поканите приятел');
         return;
       }
 
       // Get user's name for the email
-      const { data: profile, error: profileError } = await supabase
+      const { data: userProfile, error: userProfileError } = await supabase
         .from('profiles')
         .select('name')
         .eq('id', user.id)
         .maybeSingle();
 
-      if (profileError) {
-        console.error('Profile fetch error:', profileError);
-        Alert.alert('Error', 'Failed to get your profile information');
+      if (userProfileError) {
+        console.error('Profile fetch error:', userProfileError);
+        Alert.alert('Грешка', 'Възникна проблем при зареждане на профила ви');
+        return;
+      }
+
+      // Validate EmailJS configuration
+      if (!EMAILJS_CONFIG.SERVICE_ID || !EMAILJS_CONFIG.TEMPLATE_ID || !EMAILJS_CONFIG.PUBLIC_KEY) {
+        console.error('EmailJS configuration is missing');
+        Alert.alert('Грешка', 'Имейл услугата не е конфигурирана правилно. Моля, свържете се с поддръжката.');
         return;
       }
 
       // Send email using EmailJS
       const templateParams = {
         to_email: inviteEmail,
-        inviter_name: profile?.name || 'Потребител на CashWise',
+        inviter_name: userProfile?.name || 'Потребител на CashWise',
         message: 'Присъедини се към CashWise и нека заедно да научим повече за финансите!'
       };
 
       await emailjs.send(
-        'YOUR_SERVICE_ID', // Replace with your EmailJS service ID
-        'YOUR_TEMPLATE_ID', // Replace with your EmailJS template ID
+        EMAILJS_CONFIG.SERVICE_ID,
+        EMAILJS_CONFIG.TEMPLATE_ID,
         templateParams,
-        'YOUR_PUBLIC_KEY' // Replace with your EmailJS public key
+        EMAILJS_CONFIG.PUBLIC_KEY
       );
 
       // Award XP for sending the invite
-      const success = await updateUserXP(300);
+      const success = await updateUserXP(100);
       if (success) {
-        await markChallengeCompleted(1);
+        try {
+          await markChallengeCompleted(1);
+        } catch (error: any) {
+          // Ignore duplicate key errors as they just mean the challenge was already completed
+          if (error.code !== '23505') {
+            throw error;
+          }
+        }
         setShowInviteModal(false);
         setInviteEmail('');
         Alert.alert('Успех', 'Поканата е изпратена успешно!');
       }
     } catch (error) {
-      console.error('Error sending invitation:', error);
-      if (error instanceof Error) {
-        console.error('Error details:', error.message);
-      }
-      Alert.alert('Грешка', 'Неуспешно изпращане на поканата. Моля, опитайте отново.');
+      console.error('Error sending invite:', error);
+      Alert.alert('Грешка', 'Възникна проблем при изпращане на поканата. Моля, опитайте отново.');
+    } finally {
+      setIsInviting(false);
     }
   };
 
@@ -239,12 +350,20 @@ const ChallengesScreen = () => {
         return;
       }
 
-      const { data: attempts } = await supabase
+      // Check for any previous attempts
+      const { data: attempts, error } = await supabase
         .from('quiz_attempts')
-        .select('personality_type')
+        .select('personality_type, completed_at')
         .eq('profile_id', user.id)
         .eq('quiz_id', 'financial_personality')
+        .order('completed_at', { ascending: false })
+        .limit(1)
         .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
+        console.error('Error checking previous attempts:', error);
+        throw error;
+      }
 
       if (attempts) {
         setHasAttemptedTest(true);
@@ -265,7 +384,7 @@ const ChallengesScreen = () => {
           balanced: {
             type: 'balanced',
             title: 'Балансиран реалист',
-            description: 'Имаш разумно отношение към парите, но може биometimes се колебаеш. Усъвършенствай планирането и създай ясни финансови цели.',
+            description: 'Имаш разумно отношение към парите, но може биsometimes се колебаеш. Усъвършенствай планирането и създай ясни финансови цели.',
             tips: [
               'Установи ясни приоритети за спестяванията си',
               'Разнообразявай инвестициите си',
@@ -288,13 +407,31 @@ const ChallengesScreen = () => {
           },
         };
         setTestResult(resultMap[attempts.personality_type]);
+      } else {
+        setHasAttemptedTest(false);
+        setTestResult(null);
       }
     } catch (error) {
       console.error('Error checking previous attempts:', error);
+      Alert.alert('Грешка', 'Възникна проблем при проверка на предишни опити');
     } finally {
       setLoadingAttempts(false);
     }
   };
+
+  // Call checkPreviousAttempts when the screen comes into focus
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      checkPreviousAttempts();
+    });
+
+    return unsubscribe;
+  }, [navigation]);
+
+  // Initial check when component mounts
+  useEffect(() => {
+    checkPreviousAttempts();
+  }, []);
 
   useEffect(() => {
     const initializeChallenges = async () => {
@@ -312,8 +449,10 @@ const ChallengesScreen = () => {
         completed: hasAttemptedTest,
         action: async () => {
           if (hasAttemptedTest) {
+            // Show the results modal if test is completed
             setShowTestModal(true);
           } else {
+            // Show the test if not completed
             setShowTestModal(true);
           }
         },
@@ -323,8 +462,8 @@ const ChallengesScreen = () => {
         {
           id: 1,
           title: 'Покани приятел',
-          description: 'Изпрати покана на приятел да се присъедини към CashWise',
-          xp: 300,
+          description: 'Изпрати покана на приятел да се присъедини към CashWise (еднократно на месец)',
+          xp: 100,
           icon: 'person-add',
           completed: completedToday.includes(1),
           action: async () => {
@@ -336,61 +475,10 @@ const ChallengesScreen = () => {
           },
         },
         {
-          id: 2,
-          title: 'Тест',
-          description: 'Направи бърз тест, за да провериш финансовите си познания',
-          xp: 250,
-          icon: 'school',
-          completed: completedToday.includes(2) || hasAttemptedTest,
-          action: async () => {
-            if (completedToday.includes(2) || hasAttemptedTest) {
-              Alert.alert(
-                'Вече е изпълнено', 
-                hasAttemptedTest 
-                  ? 'Вече сте направили този тест. Можете да видите резултатите си в профила си.' 
-                  : 'Вече сте изпълнили това предизвикателство днес!'
-              );
-              return;
-            }
-            navigation.navigate('Quiz', { 
-              lessonId: 'daily-challenge',
-              onComplete: async () => {
-                const success = await updateUserXP(250);
-                if (success) {
-                  await markChallengeCompleted(2);
-                  setHasAttemptedTest(true);
-                }
-              }
-            });
-          },
-        },
-        {
-          id: 3,
-          title: 'Попълни профила си',
-          description: 'Попълни цялата информация в профила си',
-          xp: 100,
-          icon: 'person-circle',
-          completed: completedToday.includes(3),
-          action: async () => {
-            if (completedToday.includes(3)) {
-              Alert.alert('Вече е изпълнено', 'Вече сте изпълнили това предизвикателство днес!');
-              return;
-            }
-            navigation.navigate('Profile', {
-              onComplete: async () => {
-                const success = await updateUserXP(100);
-                if (success) {
-                  await markChallengeCompleted(3);
-                }
-              }
-            });
-          },
-        },
-        {
           id: 4,
           title: 'Дневна серия',
-          description: 'Завърши поне един урок днес, за да поддържаш серията си',
-          xp: 300,
+          description: 'Завърши поне един урок и тест днес, за да поддържаш серията си',
+          xp: 25,
           icon: 'flame',
           completed: completedToday.includes(4),
           action: async () => {
@@ -398,10 +486,57 @@ const ChallengesScreen = () => {
               Alert.alert('Вече е изпълнено', 'Вече сте изпълнили това предизвикателство днес!');
               return;
             }
-            Alert.alert(
-              'Дневна серия',
-              'Завърши който и да е урок, за да получиш наградата. XP ще бъдат добавени автоматично след завършване на урока.'
-            );
+
+            try {
+              const { data: { user } } = await supabase.auth.getUser();
+              if (!user) {
+                Alert.alert('Грешка', 'Моля, влезте в профила си, за да печелите XP');
+                return;
+              }
+
+              // Get today's date in YYYY-MM-DD format
+              const today = new Date().toISOString().split('T')[0];
+
+              // Check if user has completed both a lesson and a quiz today
+              const { data: activities, error: activityError } = await supabase
+                .from('learning_activity')
+                .select('activity_type, activity_date')
+                .eq('user_id', user.id)
+                .eq('activity_date', today);
+
+              if (activityError) throw activityError;
+
+              // Log activities for debugging
+              console.log('Today\'s activities:', activities);
+
+              const hasLesson = activities?.some(a => a.activity_type === 'lesson');
+              const hasQuiz = activities?.some(a => a.activity_type === 'quiz');
+
+              console.log('Has lesson:', hasLesson, 'Has quiz:', hasQuiz);
+
+              if (!hasLesson || !hasQuiz) {
+                Alert.alert(
+                  'Не е изпълнено',
+                  'За да получите XP за дневната серия, трябва да завършите поне един урок И един тест днес.'
+                );
+                return;
+              }
+
+              // If both conditions are met, award XP
+              const success = await updateUserXP(25, 4);
+              if (success) {
+                setChallenges(prev => 
+                  prev.map(c => c.id === 4 ? { ...c, completed: true } : c)
+                );
+                Alert.alert(
+                  'Успех!',
+                  'Поздравления! Завършихте дневната серия и спечелихте 25 XP!'
+                );
+              }
+            } catch (error) {
+              console.error('Error checking daily streak:', error);
+              Alert.alert('Грешка', 'Възникна проблем при проверка на дневната серия. Моля, опитайте отново.');
+            }
           },
         },
       ];
@@ -411,11 +546,7 @@ const ChallengesScreen = () => {
     };
 
     initializeChallenges();
-  }, []);
-
-  useEffect(() => {
-    checkPreviousAttempts();
-  }, []);
+  }, [hasAttemptedTest]);
 
   useEffect(() => {
     if (showTestModal && hasAttemptedTest) {
@@ -436,6 +567,48 @@ const ChallengesScreen = () => {
         return;
       }
 
+      // Update local state immediately before any async operations
+      setHasAttemptedTest(true);
+      setTestResult(result);
+      setChallenges(prevChallenges => 
+        prevChallenges.map(challenge => 
+          challenge.id === 0 
+            ? { 
+                ...challenge, 
+                completed: true, 
+                description: 'Прегледай своя финансов профил и съвети за подобрение',
+                action: async () => {
+                  setShowTestModal(true);
+                  slideAnim.value = withSpring(1, {
+                    damping: 15,
+                    stiffness: 100,
+                  });
+                }
+              }
+            : challenge
+        )
+      );
+
+      // Check if user has already taken the test
+      const { data: existingAttempt } = await supabase
+        .from('quiz_attempts')
+        .select('id')
+        .eq('profile_id', user.id)
+        .eq('quiz_id', 'financial_personality')
+        .single();
+
+      if (existingAttempt) {
+        Alert.alert('Грешка', 'Вече сте направили този тест');
+        setShowTestModal(false);
+        return;
+      }
+
+      // First get current profile to ensure we have the latest XP
+      const { data: profile, error: profileError } = await database.getProfile(user.id);
+      if (profileError) throw profileError;
+
+      const typedProfile = profile as Profile;
+
       // Save the test result
       const { error } = await supabase
         .from('quiz_attempts')
@@ -451,19 +624,43 @@ const ChallengesScreen = () => {
 
       if (error) throw error;
 
-      // Award XP for completing the test
-      await updateUserXP(500);
-      setHasAttemptedTest(true);
-      setTestResult(result);
-      setShowTestModal(false);
-      
-      Alert.alert(
-        'Поздравления!',
-        'Успешно завършихте теста и спечелихте 500 XP!'
-      );
+      // Update profile with new XP and record learning activity
+      const { data: updatedProfile, error: updateError } = await database.updateProfile(user.id, {
+        xp: 500,  // This will be added to current XP by database.updateProfile
+        completed_quizzes: (typedProfile?.completed_quizzes || 0) + 1
+      });
+
+      if (updateError) throw updateError;
+
+      // Record the learning activity
+      await database.addLearningActivity({
+        user_id: user.id,
+        activity_type: 'quiz',
+        quiz_id: 'financial_personality',
+        xp_earned: 500
+      });
+
+      // Close the modal after a short delay to show the completion state
+      setTimeout(() => {
+        setShowTestModal(false);
+        Alert.alert(
+          'Поздравления!',
+          `Успешно завършихте теста и спечелихте 500 XP!\nНова XP: ${updatedProfile?.xp}`
+        );
+      }, 500);
     } catch (error) {
-      console.error('Error saving test result:', error);
+      console.error('Error completing test:', error);
       Alert.alert('Грешка', 'Възникна проблем при запазване на резултата');
+      // Revert the local state if there was an error
+      setHasAttemptedTest(false);
+      setTestResult(null);
+      setChallenges(prevChallenges => 
+        prevChallenges.map(challenge => 
+          challenge.id === 0 
+            ? { ...challenge, completed: false, description: 'Открий своя финансов тип и получи персонализирани съвети' }
+            : challenge
+        )
+      );
     }
   };
 
@@ -472,7 +669,7 @@ const ChallengesScreen = () => {
       visible={showInviteModal}
       transparent
       animationType="slide"
-      onRequestClose={() => setShowInviteModal(false)}
+      onRequestClose={() => !isInviting && setShowInviteModal(false)}
     >
       <View style={styles.modalContainer}>
         <View style={styles.modalContent}>
@@ -484,12 +681,14 @@ const ChallengesScreen = () => {
             onChangeText={setInviteEmail}
             keyboardType="email-address"
             autoCapitalize="none"
+            editable={!isInviting}
           />
           <View style={styles.modalButtons}>
             <PaperButton
               mode="outlined"
-              onPress={() => setShowInviteModal(false)}
+              onPress={() => !isInviting && setShowInviteModal(false)}
               style={styles.modalButton}
+              disabled={isInviting}
             >
               Отказ
             </PaperButton>
@@ -497,9 +696,10 @@ const ChallengesScreen = () => {
               mode="contained"
               onPress={handleInviteFriend}
               style={styles.modalButton}
-              disabled={!inviteEmail}
+              disabled={!inviteEmail || isInviting}
+              loading={isInviting}
             >
-              Покани
+              {isInviting ? 'Изпращане...' : 'Покани'}
             </PaperButton>
           </View>
         </View>
@@ -632,7 +832,7 @@ const ChallengesScreen = () => {
               challenge.completed && styles.completedCard
             ]}
             onPress={() => challenge.action()}
-            disabled={challenge.completed}
+            activeOpacity={0.7}
           >
             <View style={[
               styles.challengeIcon,
@@ -663,6 +863,11 @@ const ChallengesScreen = () => {
               ]}>
                 {challenge.description}
               </Text>
+              {challenge.id === 0 && challenge.completed && (
+                <Text style={styles.completedNote}>
+                  Натисни за да видиш резултата си
+                </Text>
+              )}
             </View>
             <View style={[
               styles.xpContainer,
@@ -1029,6 +1234,16 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     marginLeft: 8,
+  },
+  completedChallenge: {
+    borderColor: '#4CAF50',
+    borderWidth: 1,
+  },
+  completedNote: {
+    fontSize: 12,
+    color: '#4CAF50',
+    marginTop: 4,
+    fontStyle: 'italic',
   },
 });
 

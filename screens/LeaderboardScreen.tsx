@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { View, StyleSheet, ScrollView, Dimensions, RefreshControl, TextInput, Platform, Animated } from 'react-native';
 import { Surface, Text, IconButton, useTheme, Button, Avatar, ActivityIndicator, Menu, Divider } from 'react-native-paper';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
@@ -59,6 +59,7 @@ const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ navigation }) => 
   const [showOnlyActive, setShowOnlyActive] = useState(true);
   const [activeTab, setActiveTab] = useState<TabKey>('leaderboard');
   const [fadeAnim] = useState(new Animated.Value(0));
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
 
   useEffect(() => {
     loadLeaderboardData();
@@ -73,6 +74,23 @@ const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ navigation }) => 
       }).start();
     }
   }, [loading, error]);
+
+  // Add debounce effect
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Update loadLeaderboardData to use debouncedSearchQuery
+  useEffect(() => {
+    if (debouncedSearchQuery !== undefined) {
+      setPage(0);
+      loadLeaderboardData();
+    }
+  }, [debouncedSearchQuery]);
 
   const calculateRank = (xp: number): string => {
     if (xp >= 10000) return 'Финансов Експерт';
@@ -96,12 +114,17 @@ const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ navigation }) => 
       let query = supabase
         .from('profiles')
         .select('*');
-      console.log('Initial query built');
+
+      // Add search filter if searchQuery is not empty
+      if (debouncedSearchQuery.trim()) {
+        query = query.ilike('name', `%${debouncedSearchQuery.trim()}%`);
+      }
 
       // Get total count first
       const { data: countData, error: countError } = await supabase
         .from('profiles')
-        .select('*', { count: 'exact', head: true });
+        .select('*', { count: 'exact', head: true })
+        .ilike('name', debouncedSearchQuery.trim() ? `%${debouncedSearchQuery.trim()}%` : '%');
       if (countError) throw countError;
       const totalCount = countData?.length || 0;
       console.log('Total users count:', totalCount);
@@ -233,11 +256,7 @@ const LeaderboardScreen: React.FC<LeaderboardScreenProps> = ({ navigation }) => 
           style={[styles.searchInput, { backgroundColor: colors.surface }]}
           placeholder="Търси потребител..."
           value={searchQuery}
-          onChangeText={(text) => {
-            setSearchQuery(text);
-            setPage(0);
-            loadLeaderboardData();
-          }}
+          onChangeText={setSearchQuery}
         />
         
         <Menu

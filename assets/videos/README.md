@@ -15,7 +15,7 @@ Video requirements:
 
 Example:
 ```
-assets/videos/
+assets/videos/ assets/videos
   ├── lesson1.mp4
   ├── lesson2.mp4
   └── lesson3.mp4

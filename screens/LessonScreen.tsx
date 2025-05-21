@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle, useCallback } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Image, Dimensions, StatusBar, Alert, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Image, Dimensions, StatusBar, Alert, ActivityIndicator, useWindowDimensions, Platform, ViewStyle, TextStyle, Animated } from 'react-native';
 import { Text, Surface, Button, ProgressBar, IconButton, Appbar } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Slider from '@react-native-community/slider';
 import { useTheme, THEME } from '../ThemeContext';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
@@ -9,14 +10,26 @@ import { auth, database, supabase } from '../supabase';
 import { RootStackParamList } from '../AppNavigator';
 import Video from 'react-native-video';
 import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system';
 
 export interface Topic {
   title: string;
   content: string;
   image?: string;
   videoAsset?: string;
+  videoUrl?: string;
   keyPoints?: string[];
   visualElements?: VisualElement[];
+  quiz?: {
+    questions: {
+      id: string;
+      question: string;
+      type: 'single' | 'multiple' | 'matching';
+      options: string[];
+      correctAnswers: number[];
+      explanation: string;
+    }[];
+  };
 }
 
 export interface VisualElement {
@@ -59,6 +72,17 @@ interface LessonRouteParams {
   topic: string;
   description: string;
   topics: Topic[];
+  isSpecialLesson?: boolean;
+}
+
+interface UserProgress {
+  id: string;
+  user_id: string;
+  lesson_id: string;
+  completed: boolean;
+  last_accessed: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // Extend the RootStackParamList for Lesson screen
@@ -153,60 +177,377 @@ const { width } = Dimensions.get('window');
 interface PlaybackStatus {
   isLoaded: boolean;
   didJustFinish: boolean;
+  position: number;
+  duration: number;
+  isPlaying: boolean;
 }
 
-// Add back the getVideoAsset function
+// Define video assets statically
+const videoAssets = {
+  lesson1: require('../assets/videos/lesson1.mp4'),
+  lesson2: require('../assets/videos/lesson2.mp4'),
+  lesson3: require('../assets/videos/lesson3.mp4'),
+} as const;
+
+// Update the getVideoAsset function with more detailed logging
 const getVideoAsset = async (videoName: string) => {
   try {
-    // Remove any existing .mp4 extension and add it back to ensure consistency
+    console.log('Attempting to load video:', videoName);
+    
+    // Check if we have a local video asset
+    const videoAsset = videoAssets[videoName as keyof typeof videoAssets];
+    console.log('Local video asset found:', !!videoAsset);
+    
+    if (videoAsset) {
+      try {
+        // Get the asset module
+        const asset = Asset.fromModule(videoAsset);
+        console.log('Asset module loaded:', !!asset);
+        
+        // Download the asset if needed
+        if (!asset.localUri) {
+          console.log('Downloading asset...');
+          await asset.downloadAsync();
+          console.log('Asset downloaded, localUri:', asset.localUri);
+        } else {
+          console.log('Using existing local asset:', asset.localUri);
+        }
+        
+        if (asset.localUri) {
+          // Verify the file exists
+          const fileInfo = await FileSystem.getInfoAsync(asset.localUri);
+          if (!fileInfo.exists) {
+            console.error('Local asset file not found:', asset.localUri);
+            throw new Error('Local video file not found');
+          }
+          
+          console.log('Successfully loaded local video asset:', {
+            uri: asset.localUri,
+            size: fileInfo.size,
+            exists: fileInfo.exists
+          });
+          return asset.localUri;
+        }
+      } catch (assetError) {
+        console.error('Error loading local asset:', assetError);
+        // Continue to Supabase fallback
+      }
+    }
+
+    // Fallback to Supabase storage
+    console.log('Falling back to Supabase storage...');
     const cleanVideoName = videoName.replace('.mp4', '');
     const videoPath = `${cleanVideoName}/${cleanVideoName}.mp4`;
-    console.log('Getting video URL from Supabase storage:', videoPath);
+    console.log('Attempting to get video from Supabase path:', videoPath);
     
-    // Get the public URL from Supabase storage using the correct bucket and folder structure
     const { data } = await supabase
       .storage
       .from('lesson-videos')
       .getPublicUrl(videoPath);
 
     if (!data?.publicUrl) {
+      console.error('No public URL returned from Supabase');
       throw new Error(`Failed to get video URL for ${videoPath}`);
     }
 
-    console.log('Successfully got video URL:', data.publicUrl);
+    // Verify the URL is accessible
+    try {
+      const response = await fetch(data.publicUrl, { method: 'HEAD' });
+      if (!response.ok) {
+        throw new Error(`Video URL not accessible: ${response.status} ${response.statusText}`);
+      }
+    } catch (urlError) {
+      console.error('Error verifying video URL:', urlError);
+      throw new Error('Video URL is not accessible');
+    }
+
+    console.log('Successfully got video URL from Supabase:', data.publicUrl);
     return data.publicUrl;
   } catch (error) {
-    console.error('Error getting video URL:', error);
+    console.error('Error in getVideoAsset:', error);
     throw error;
   }
 };
 
-// Update the VideoPlayer component to use forwardRef
+// Update the styles for both VideoPlayer and WebVideoPlayer components
+const videoControlsStyles: {
+  videoControlsContainer: ViewStyle;
+  videoProgressContainer: ViewStyle;
+  timeText: TextStyle;
+  videoProgressBar: ViewStyle;
+  videoButtonsContainer: ViewStyle;
+  volumeContainer: ViewStyle;
+  volumeSlider: ViewStyle;
+  controlButton: ViewStyle;
+} = {
+  videoControlsContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    padding: 8,
+    flexDirection: 'column' as const,
+    gap: 4,
+  },
+  videoProgressContainer: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    marginBottom: 4,
+  },
+  timeText: {
+    color: '#ffffff',
+    fontSize: 12,
+    marginHorizontal: 8,
+    minWidth: 40,
+    textAlign: 'center' as const,
+  },
+  videoProgressBar: {
+    flex: 1,
+    height: 20,
+  },
+  videoButtonsContainer: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    justifyContent: 'flex-start' as const,
+    gap: 8,
+  },
+  volumeContainer: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    marginLeft: 'auto',
+  },
+  volumeSlider: {
+    width: 80,
+    height: 20,
+  },
+  controlButton: {
+    margin: 0,
+    padding: 0,
+  }
+};
+
+// Remove VideoPlayerControls component and simplify VideoPlayer
 const VideoPlayer = forwardRef<any, { uri: string }>(({ uri }, ref) => {
   const { width: windowWidth } = useWindowDimensions();
-  const videoWidth = Math.min(windowWidth - 32, 640); // Account for padding
-  const videoHeight = (videoWidth * 9) / 16; // 16:9 aspect ratio
+  const videoWidth = Math.min(windowWidth - 32, 640);
+  const videoHeight = (videoWidth * 9) / 16;
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<any>(null);
+
+  const handleLoad = (data: any) => {
+    console.log('Video loaded successfully:', {
+      duration: data.duration,
+      naturalSize: data.naturalSize,
+      uri: uri
+    });
+    setIsLoading(false);
+    setError(null);
+  };
+
+  const handleError = (error: any) => {
+    console.error('Video loading error:', error);
+    setIsLoading(false);
+    setError('Failed to load video. Please check your connection and try again.');
+  };
+
+  const togglePlayPause = () => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
 
   return (
-    <View style={[styles.videoContainer, { width: videoWidth, height: videoHeight }]}>
+    <TouchableOpacity 
+      activeOpacity={1}
+      onPress={togglePlayPause}
+      style={[
+        styles.videoContainer, 
+        { 
+          width: videoWidth, 
+          height: videoHeight 
+        }
+      ]}
+    >
+      {isLoading && (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0000ff" />
+          <Text style={styles.loadingText}>Loading video...</Text>
+        </View>
+      )}
+      {error && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Button 
+            mode="contained" 
+            onPress={() => {
+              setError(null);
+              setIsLoading(true);
+              if (videoRef.current) {
+                videoRef.current.reload();
+              }
+            }}
+            style={styles.retryButton}
+          >
+            Retry
+          </Button>
+        </View>
+      )}
       <Video
-        ref={ref}
+        ref={videoRef}
         source={{ uri }}
         style={styles.video}
         resizeMode="contain"
-        controls={true}
-        paused={true}
+        controls={false}
+        paused={!isPlaying}
         repeat={false}
+        onLoad={handleLoad}
+        onError={handleError}
+        onEnd={() => {
+          setIsPlaying(false);
+          if (videoRef.current) {
+            videoRef.current.seek(0);
+          }
+        }}
+        onBuffer={({ isBuffering }) => {
+          if (isBuffering) {
+            setIsLoading(true);
+          }
+        }}
+        bufferConfig={{
+          minBufferMs: 15000,
+          maxBufferMs: 50000,
+          bufferForPlaybackMs: 2500,
+          bufferForPlaybackAfterRebufferMs: 5000
+        }}
+        ignoreSilentSwitch="ignore"
+        playInBackground={false}
+        playWhenInactive={false}
       />
-    </View>
+      {!isLoading && !error && !isPlaying && (
+        <View style={styles.playButtonContainer}>
+          <IconButton
+            icon="play"
+            size={48}
+            iconColor="#ffffff"
+            style={styles.playButton}
+          />
+        </View>
+      )}
+    </TouchableOpacity>
   );
 });
 
-// Add display name for better debugging
-VideoPlayer.displayName = 'VideoPlayer';
+// Simplify WebVideoPlayer similarly
+const WebVideoPlayer = forwardRef<any, { uri: string }>(({ uri }, ref) => {
+  const { width: windowWidth } = useWindowDimensions();
+  const videoWidth = Math.min(windowWidth - 32, 640);
+  const videoHeight = (videoWidth * 9) / 16;
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const handleLoad = () => {
+    setIsLoading(false);
+    setError(null);
+  };
+
+  const handleError = (e: any) => {
+    console.error('Web video loading error:', e);
+    setIsLoading(false);
+    setError('Failed to load video. Please check your connection and try again.');
+  };
+
+  const togglePlayPause = () => {
+    if (videoRef.current) {
+      if (isPlaying) {
+        videoRef.current.pause();
+      } else {
+        videoRef.current.play();
+      }
+      setIsPlaying(!isPlaying);
+    }
+  };
+
+  return (
+    <TouchableOpacity 
+      activeOpacity={1}
+      onPress={togglePlayPause}
+      style={[
+        styles.videoContainer, 
+        { 
+          width: videoWidth, 
+          height: videoHeight 
+        }
+      ]}
+    >
+      {isLoading && (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#0000ff" />
+          <Text style={styles.loadingText}>Loading video...</Text>
+        </View>
+      )}
+      {error && (
+        <View style={styles.errorContainer}>
+          <Text style={styles.errorText}>{error}</Text>
+          <Button 
+            mode="contained" 
+            onPress={() => {
+              setError(null);
+              setIsLoading(true);
+              if (videoRef.current) {
+                videoRef.current.load();
+              }
+            }}
+            style={styles.retryButton}
+          >
+            Retry
+          </Button>
+        </View>
+      )}
+      <video
+        ref={videoRef}
+        src={uri}
+        style={{
+          width: '100%',
+          height: '100%',
+          objectFit: 'contain',
+          display: isLoading || error ? 'none' : 'block'
+        }}
+        onLoadedData={handleLoad}
+        onError={handleError}
+        onEnded={() => {
+          setIsPlaying(false);
+          if (videoRef.current) {
+            videoRef.current.currentTime = 0;
+          }
+        }}
+      />
+      {!isLoading && !error && !isPlaying && (
+        <View style={styles.playButtonContainer}>
+          <IconButton
+            icon="play"
+            size={48}
+            iconColor="#ffffff"
+            style={styles.playButton}
+          />
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
 
 export default function LessonScreen({ navigation, route }: LessonScreenProps) {
-  const { topic, description, topics } = route.params as LessonRouteParams;
+  const { topic, description, topics, isSpecialLesson } = route.params as LessonRouteParams;
   const { theme } = useTheme();
   const themeToUse = theme || THEME;
   
@@ -232,19 +573,54 @@ export default function LessonScreen({ navigation, route }: LessonScreenProps) {
 
   const videoDimensions = getVideoDimensions();
   
-  // Simple video loading
+  // Update the useEffect for video loading to handle errors better
   useEffect(() => {
     const loadVideoUrl = async () => {
-      if (!topicContent.videoAsset) return;
+      console.log('Current topic content:', {
+        title: topicContent.title,
+        videoUrl: topicContent.videoUrl,
+        videoAsset: topicContent.videoAsset
+      });
+      
+      if (!topicContent.videoUrl && !topicContent.videoAsset) {
+        console.log('No video specified for this topic');
+        return;
+      }
+      
       try {
-        const url = await getVideoAsset(topicContent.videoAsset);
-        setVideoUri(url);
+        // If we have a videoUrl, use it directly
+        if (topicContent.videoUrl) {
+          console.log('Using videoUrl:', topicContent.videoUrl);
+          // If it's a local asset (starts with 'lesson'), try to load it from assets
+          if (topicContent.videoUrl.startsWith('lesson')) {
+            const videoName = topicContent.videoUrl.replace('.mp4', '');
+            const url = await getVideoAsset(videoName);
+            console.log('Video URL loaded from assets:', url);
+            setVideoUri(url);
+          } else {
+            // Otherwise use the URL directly
+            console.log('Using direct video URL:', topicContent.videoUrl);
+            setVideoUri(topicContent.videoUrl);
+          }
+        } else if (topicContent.videoAsset) {
+          // Handle videoAsset property
+          console.log('Using videoAsset:', topicContent.videoAsset);
+          const videoName = topicContent.videoAsset.replace('.mp4', '');
+          const url = await getVideoAsset(videoName);
+          console.log('Video URL loaded from assets:', url);
+          setVideoUri(url);
+        }
       } catch (error) {
-        console.error('Error getting video URL:', error);
+        console.error('Error in loadVideoUrl:', error);
+        Alert.alert(
+          'Video Loading Error',
+          'Failed to load the video. Please check your internet connection and try again.',
+          [{ text: 'OK' }]
+        );
       }
     };
     loadVideoUrl();
-  }, [topicContent.videoAsset]);
+  }, [topicContent.videoUrl, topicContent.videoAsset]);
 
   const toggleKeyPoint = (index: number) => {
     setExpandedKeyPoints(prev => 
@@ -282,35 +658,69 @@ export default function LessonScreen({ navigation, route }: LessonScreenProps) {
         return;
       }
 
-      // Record learning activity with local date
-      await database.addLearningActivity({
-        user_id: user.id,
-        activity_type: 'lesson',
-        lesson_id: route.params.lessonId,
-        xp_earned: 50
-      });
+      if (isSpecialLesson) {
+        // For special lessons, just mark as completed
+        const { error: progressError } = await supabase
+          .from('user_progress')
+          .upsert({
+            user_id: user.id,
+            lesson_id: route.params.lessonId,
+            completed: true,
+            last_accessed: new Date().toISOString(),
+          }, {
+            onConflict: 'user_id,lesson_id'  // Specify the unique constraint
+          });
 
-      // Update user's profile
-      const { data: profile, error: profileError } = await database.getProfile(user.id);
-      if (profileError) throw profileError;
+        if (progressError) throw progressError;
 
-      if (profile) {
-        const typedProfile = profile as Profile;
-        const currentXP = typedProfile.xp || 0;
-        const completedLessons = typedProfile.completed_lessons || 0;
-
-        await database.updateProfile(user.id, {
-          xp: currentXP + 50,
-          completed_lessons: completedLessons + 1
-        } as ProfileUpdate);
+        Alert.alert(
+          'Успех!',
+          'Урокът е маркиран като завършен.',
+          [{ 
+            text: 'OK',
+            onPress: () => navigation.goBack()
+          }]
+        );
+        return;
       }
 
-      navigation.navigate('Quiz', { lessonId: route.params.lessonId });
+      // For regular lessons, proceed with quiz
+      const topicWithQuiz = topics.find(topic => topic.quiz?.questions && topic.quiz.questions.length > 0);
+      console.log('Found topic with quiz:', topicWithQuiz);
+      
+      if (!topicWithQuiz?.quiz?.questions) {
+        console.log('No quiz questions found in any topic');
+        Alert.alert(
+          'Error',
+          'No quiz questions available for this lesson.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      const quizQuestions = topicWithQuiz.quiz.questions;
+      console.log('Quiz questions from topic:', quizQuestions);
+      
+      const mappedQuestions = quizQuestions.map((q, index) => ({
+        id: `${route.params.lessonId}-q${index + 1}`,
+        question: q.question,
+        type: q.type as 'single' | 'multiple' | 'matching',
+        options: q.options,
+        correctAnswer: q.options[q.correctAnswers[0]],
+        correctAnswers: q.correctAnswers.map(i => q.options[i]),
+        explanation: q.explanation
+      }));
+      console.log('Mapped questions for navigation:', mappedQuestions);
+      
+      navigation.navigate('Quiz', { 
+        lessonId: route.params.lessonId,
+        questions: mappedQuestions
+      });
     } catch (err) {
-      console.error('Error completing lesson:', err);
+      console.error('Error in handleComplete:', err);
       Alert.alert(
         'Error',
-        'Failed to record lesson completion. Please try again.',
+        'Failed to complete lesson. Please try again.',
         [{ text: 'OK' }]
       );
     }
@@ -325,13 +735,14 @@ export default function LessonScreen({ navigation, route }: LessonScreenProps) {
     setScrollProgress(Math.max(0, scrollProgress));
   };
 
-  // Update renderVideo function
+  // Modify the renderVideo function to use the appropriate player
   const renderVideo = () => {
     if (!videoUri) return null;
-    return (
-      <View style={styles.videoWrapper}>
-        <VideoPlayer uri={videoUri} />
-      </View>
+
+    return Platform.OS === 'web' ? (
+      <WebVideoPlayer uri={videoUri} />
+    ) : (
+      <VideoPlayer uri={videoUri} />
     );
   };
 
@@ -429,25 +840,16 @@ export default function LessonScreen({ navigation, route }: LessonScreenProps) {
 
       <Surface style={[styles.navigationContainer, { backgroundColor: themeToUse.colors?.surface }]} elevation={0}>
         <Button
-          mode="outlined"
-          onPress={handlePrevious}
-          disabled={currentSubtopicIndex === 0}
-          style={[styles.navButton, currentSubtopicIndex === 0 && styles.disabledButton]}
-          contentStyle={styles.buttonContent}
-          labelStyle={styles.buttonLabel}
-          color={themeToUse.colors?.primary}
-        >
-          Предишен
-        </Button>
-        <Button
           mode="contained"
-          onPress={handleNext}
-          style={styles.navButton}
+          onPress={handleComplete}
+          style={[styles.navButton, { marginHorizontal: 0 }]}
           contentStyle={styles.buttonContent}
           labelStyle={styles.buttonLabel}
           color={themeToUse.colors?.primary}
         >
-          {currentSubtopicIndex === topics.length - 1 ? 'Започни тест' : 'Следващ'}
+          {currentSubtopicIndex === topics.length - 1 
+            ? (isSpecialLesson ? 'Маркирай като завършен' : 'Започни тест')
+            : 'Следващ'}
         </Button>
       </Surface>
     </View>
@@ -558,16 +960,12 @@ const styles = StyleSheet.create({
     color: '#000000',
   },
   navigationContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     padding: 16,
     borderTopWidth: 1,
     borderTopColor: 'rgba(0, 0, 0, 0.1)',
     backgroundColor: '#FFFFFF',
   },
   navButton: {
-    flex: 1,
-    marginHorizontal: 8,
     borderRadius: 12,
   },
   buttonContent: {
@@ -576,9 +974,6 @@ const styles = StyleSheet.create({
   buttonLabel: {
     fontSize: 16,
     fontWeight: 'bold',
-  },
-  disabledButton: {
-    opacity: 0.5,
   },
   keyPointContainer: {
     flexDirection: 'row',
@@ -597,37 +992,47 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
     borderRadius: 8,
     overflow: 'hidden',
+    position: 'relative',
   },
   video: {
     width: '100%',
     height: '100%',
   },
   loadingContainer: {
-    backgroundColor: '#1a1a1a',
-    padding: 20,
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   loadingText: {
-    color: '#fff',
-    marginTop: 12,
+    color: '#ffffff',
+    marginTop: 8,
     fontSize: 16,
-    textShadowColor: 'rgba(0, 0, 0, 0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
   },
   errorContainer: {
-    backgroundColor: '#1a1a1a',
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
+    justifyContent: 'center',
+    alignItems: 'center',
     padding: 20,
   },
   errorText: {
     color: '#fff',
     textAlign: 'center',
-    marginBottom: 16,
     fontSize: 16,
-    textShadowColor: 'rgba(0, 0, 0, 0.5)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 2,
+    marginBottom: 16,
   },
   retryButton: {
-    backgroundColor: '#fff',
+    backgroundColor: '#0000ff',
+  },
+  playButtonContainer: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  playButton: {
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    margin: 0,
   },
 }); 

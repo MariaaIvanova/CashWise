@@ -118,7 +118,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
   const [error, setError] = useState<string | null>(null);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
   const [soundEnabled, setSoundEnabled] = useState(true);
-  const [darkMode, setDarkMode] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editingPlatform, setEditingPlatform] = useState<string | null>(null);
   const [socialLinkEditValue, setSocialLinkEditValue] = useState('');
@@ -228,7 +227,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       if (settingsResult.data) {
         setNotificationsEnabled(settingsResult.data.notifications_enabled);
         setSoundEnabled(settingsResult.data.sound_enabled);
-        setDarkMode(settingsResult.data.dark_mode);
       }
 
       // Set avatar URL
@@ -358,9 +356,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
           break;
         case 'sound_enabled':
           setSoundEnabled(value);
-          break;
-        case 'dark_mode':
-          setDarkMode(value);
           break;
       }
     } catch (err) {
@@ -614,32 +609,53 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
     </Surface>
   );
 
-  const renderAchievements = () => (
-    <Surface style={cardStyle}>
-      <Text variant="titleMedium" style={{ color: '#000000', marginBottom: 20, fontSize: 18, fontWeight: '600' }}>
-        Постижения
-      </Text>
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-        {userData.achievements.map((achievement: Achievement) => (
-          <View key={achievement.id} style={styles.achievementContainer}>
-            <MaterialCommunityIcons
-              name={achievement.icon || 'trophy'}
-              size={28}
-              color={achievement.completed ? '#4CAF50' : '#BDBDBD'}
-            />
-            <View style={styles.achievementInfo}>
-              <Text style={[styles.achievementTitle, { color: achievement.completed ? '#4CAF50' : '#000000' }]}>
-                {achievement.title}
-              </Text>
-              <Text style={styles.achievementDescription}>
-                {achievement.description}
-              </Text>
-            </View>
+  const renderAchievements = () => {
+    const completedAchievements = userData.achievements.filter(achievement => achievement.completed);
+
+    return (
+      <Surface style={cardStyle}>
+        <Text variant="titleMedium" style={{ color: '#000000', marginBottom: 20, fontSize: 18, fontWeight: '600' }}>
+          Постижения
+        </Text>
+        {completedAchievements.length > 0 ? (
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+            {completedAchievements.map((achievement: Achievement) => (
+              <View key={achievement.id} style={styles.achievementContainer}>
+                <View style={styles.achievementIconContainer}>
+                  <MaterialCommunityIcons
+                    name={achievement.icon || 'trophy'}
+                    size={28}
+                    color="#8A97FF"
+                  />
+                  <View style={styles.achievementCheckmark}>
+                    <MaterialCommunityIcons name="check" size={16} color="#FFFFFF" />
+                  </View>
+                </View>
+                <View style={styles.achievementInfo}>
+                  <Text style={[styles.achievementTitle, { color: '#8A97FF' }]}>
+                    {achievement.title}
+                  </Text>
+                  <Text style={styles.achievementDescription}>
+                    {achievement.description}
+                  </Text>
+                </View>
+              </View>
+            ))}
           </View>
-        ))}
-      </View>
-    </Surface>
-  );
+        ) : (
+          <View style={styles.emptyAchievementsContainer}>
+            <MaterialCommunityIcons name="trophy-outline" size={48} color="#BDBDBD" />
+            <Text style={styles.emptyAchievementsText}>
+              Все още нямате постижения
+            </Text>
+            <Text style={styles.emptyAchievementsSubtext}>
+              Започнете да учите и да изпълнявате задачи, за да отключите постижения
+            </Text>
+          </View>
+        )}
+      </Surface>
+    );
+  };
 
   const renderInterests = () => (
     <Surface style={cardStyle}>
@@ -788,18 +804,6 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
           />
         </View>
         <Divider style={{ backgroundColor: 'rgba(0, 0, 0, 0.1)', marginVertical: 12 }} />
-        <View style={styles.settingItem}>
-          <MaterialCommunityIcons name="theme-light-dark" size={24} color="#8A97FF" />
-          <Text variant="bodyMedium" style={{ color: '#000000', flex: 1, marginLeft: 12, fontSize: 16 }}>
-            Тъмен режим
-          </Text>
-          <Switch
-            value={darkMode}
-            onValueChange={(value) => handleSettingsChange('dark_mode', value)}
-            color="#8A97FF"
-          />
-        </View>
-        <Divider style={{ backgroundColor: 'rgba(0, 0, 0, 0.1)', marginVertical: 12 }} />
         <TouchableOpacity 
           style={styles.logoutButton}
           onPress={async () => {
@@ -860,9 +864,9 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
       <Surface style={[cardStyle, styles.skeletonContainer]}>
         <View style={[styles.skeletonText, { width: 120, height: 24, marginBottom: 20 }]} />
         {[1, 2, 3].map((_, index) => (
-          <View key={index} style={styles.achievementContainer}>
+          <View key={index} style={styles.skeletonAchievementContainer}>
             <View style={[styles.skeletonCircle, { width: 28, height: 28 }]} />
-            <View style={styles.achievementInfo}>
+            <View style={styles.skeletonAchievementInfo}>
               <View style={[styles.skeletonText, { width: 120, height: 20 }]} />
               <View style={[styles.skeletonText, { width: 200, height: 16, marginTop: 4 }]} />
             </View>
@@ -1140,25 +1144,61 @@ const styles = StyleSheet.create({
   },
   achievementContainer: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     backgroundColor: '#F5F5F5',
     borderRadius: 12,
     padding: 12,
     marginBottom: 8,
     width: '100%',
   },
+  achievementIconContainer: {
+    position: 'relative',
+    width: 28,
+    height: 28,
+    marginRight: 12,
+  },
+  achievementCheckmark: {
+    position: 'absolute',
+    bottom: -4,
+    right: -4,
+    backgroundColor: '#8A97FF',
+    borderRadius: 10,
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
+  },
   achievementInfo: {
-    marginLeft: 12,
     flex: 1,
   },
   achievementTitle: {
     fontSize: 16,
     fontWeight: '600',
+    marginBottom: 4,
   },
   achievementDescription: {
     fontSize: 14,
     color: 'rgba(0, 0, 0, 0.6)',
+    marginBottom: 8,
+  },
+  achievementProgressContainer: {
     marginTop: 4,
+  },
+  achievementProgressBar: {
+    height: 4,
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  achievementProgressFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  achievementProgressText: {
+    fontSize: 12,
+    color: 'rgba(0, 0, 0, 0.6)',
   },
   socialLinkEdit: {
     flex: 1,
@@ -1221,6 +1261,38 @@ const styles = StyleSheet.create({
   skeletonText: {
     backgroundColor: '#e0e0e0',
     borderRadius: 4,
+  },
+  skeletonAchievementContainer: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 8,
+    width: '100%',
+  },
+  skeletonAchievementInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  emptyAchievementsContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+    backgroundColor: '#F5F5F5',
+    borderRadius: 12,
+  },
+  emptyAchievementsText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#000000',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptyAchievementsSubtext: {
+    fontSize: 14,
+    color: 'rgba(0, 0, 0, 0.6)',
+    textAlign: 'center',
   },
 });
 

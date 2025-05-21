@@ -23,6 +23,7 @@ interface LessonRouteParams {
     image?: string;
     keyPoints?: string[];
   }[];
+  isSpecialLesson?: boolean;
 }
 
 // Define the root stack parameter list
@@ -35,6 +36,15 @@ export type RootStackParamList = {
   Quiz: { 
     lessonId: string;
     onComplete?: () => Promise<void>;
+    questions?: Array<{
+      id: string;
+      question: string;
+      type: 'single' | 'multiple' | 'matching';
+      options: string[];
+      correctAnswer: string;
+      correctAnswers: string[];
+      explanation?: string;
+    }>;
   };
   Calendar: undefined;
   Leaderboard: undefined;

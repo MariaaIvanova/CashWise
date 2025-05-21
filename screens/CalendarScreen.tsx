@@ -251,7 +251,6 @@ const CalendarScreen: React.FC<CalendarScreenProps> = ({ navigation }) => {
           renderSkeletonLoader()
         ) : (
           <Animated.View style={{ opacity: fadeAnim }}>
-            {renderHeader()}
             {renderStreakInfo()}
             {isCalendarReady && (
               <Surface style={[styles.calendarContainer, { backgroundColor: '#fafafa' }]}>

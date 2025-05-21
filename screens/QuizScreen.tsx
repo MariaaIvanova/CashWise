@@ -2,13 +2,14 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, StyleSheet, ScrollView, TouchableOpacity, Animated, Alert, ActivityIndicator } from 'react-native';
 import { Title, Paragraph, Button, Card, RadioButton, Text, IconButton, Surface, ProgressBar, Divider } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { useTheme, THEME } from '../ThemeContext';
+import { useTheme } from '../ThemeContext';
 import { Appbar } from 'react-native-paper';
 import { ParamListBase } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
-import { auth, database } from '../supabase';
+import { auth, database, supabase } from '../supabase';
 import BottomNavigationBar, { TabKey } from '../components/BottomNavigationBar';
+import { quizService, QuizCompletionData, QuizResult } from '../services/quizService';
 
 interface Profile {
   id: string;
@@ -74,32 +75,13 @@ interface QuizAttempt {
   personality_type?: string;
 }
 
-interface QuizCompletionData {
-  score: number;
-  totalQuestions: number;
-  xpEarned: number;
-  timeBonus: number;
-  perfectScore: boolean;
-  passedQuiz: boolean;
-  previousBestScore: number;
-  attemptsCount: number;
-  recommendations: string[];
-  tips: string[];
-  personalityType?: string;
-  description?: string;
-  explanation?: string;
-  personalityColor?: string;
-}
-
 interface Question {
   id: string;
-  text: string;
   question: string;
+  type: 'single' | 'multiple' | 'matching';
   options: string[];
   correctAnswer: string;
-  type: 'single' | 'multiple' | 'matching';
-  correctAnswers?: string[];
-  pairs?: MatchingPair[];
+  correctAnswers: string[];
   explanation?: string;
 }
 
@@ -130,7 +112,9 @@ interface QuizState {
 
 export default function QuizScreen({ navigation, route }: QuizScreenProps) {
   const { theme } = useTheme();
-  const colors = theme.colors || THEME.colors;
+  const themeColors = theme.colors;
+  const scrollViewRef = useRef<ScrollView>(null);
+  const [fadeAnim] = useState(new Animated.Value(0));
   const [state, setState] = useState<QuizState>({
     loading: true,
     error: null,
@@ -150,7 +134,13 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
     answeredCorrectly: false,
     currentQuestion: null
   });
-  const [fadeAnim] = useState(new Animated.Value(0));
+
+  // Add effect for auto-scrolling when completion data is loaded
+  useEffect(() => {
+    if (state.completionData && !state.loadingCompletion) {
+      scrollViewRef.current?.scrollTo({ y: 0, animated: true });
+    }
+  }, [state.completionData, state.loadingCompletion]);
 
   const updateState = (updates: Partial<QuizState>) => {
     setState(prev => ({ ...prev, ...updates }));
@@ -171,8 +161,13 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
 
     const currentQuestion = state.questions[state.currentQuestionIndex];
     if (currentQuestion.type === 'multiple') {
+      // Toggle the answer - remove if already selected, add if not selected
+      const newSelectedAnswers = state.selectedAnswers.includes(answer)
+        ? state.selectedAnswers.filter(a => a !== answer)
+        : [...state.selectedAnswers, answer];
+      
       updateState({
-        selectedAnswers: [...state.selectedAnswers, answer]
+        selectedAnswers: newSelectedAnswers
       });
     } else if (currentQuestion.type === 'matching') {
       updateState({
@@ -197,9 +192,17 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
     let isCorrect = false;
 
     if (currentQuestion.type === 'multiple') {
-      isCorrect = state.selectedAnswers.every(answer => 
-        currentQuestion.correctAnswers?.includes(answer)
+      // For multiple choice, check that:
+      // 1. All correct answers are selected
+      // 2. No incorrect answers are selected
+      const correctAnswers = currentQuestion.correctAnswers || [];
+      const hasAllCorrect = correctAnswers.every(answer => 
+        state.selectedAnswers.includes(answer)
       );
+      const hasNoIncorrect = state.selectedAnswers.every(answer =>
+        correctAnswers.includes(answer)
+      );
+      isCorrect = hasAllCorrect && hasNoIncorrect;
     } else if (currentQuestion.type === 'matching') {
       isCorrect = Object.entries(state.matchingAnswers).every(([questionId, answer]) => {
         const question = state.questions.find(q => q.id === questionId);
@@ -209,22 +212,19 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
       isCorrect = currentQuestion.correctAnswer === state.selectedAnswer;
     }
 
-    if (isCorrect) {
       updateState({
-        score: state.score + 1,
-        showResult: true
+      score: isCorrect ? state.score + 1 : state.score,
+      showResult: true,
+      answeredCorrectly: isCorrect
       });
-      setTimeout(handleNextQuestion, 1500);
-    } else {
-      updateState({ showResult: true });
-      setTimeout(handleNextQuestion, 1500);
-    }
   };
 
   const handleNextQuestion = () => {
     if (state.currentQuestionIndex < state.questions.length - 1) {
+      const nextIndex = state.currentQuestionIndex + 1;
       updateState({
-        currentQuestionIndex: state.currentQuestionIndex + 1,
+        currentQuestionIndex: nextIndex,
+        currentQuestion: state.questions[nextIndex],
         selectedAnswer: null,
         selectedAnswers: [],
         matchingAnswers: {},
@@ -232,330 +232,178 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
         timeRemaining: 60
       });
     } else {
-      updateState({ quizCompleted: true });
-      saveQuizResults();
+      // Calculate final score and determine if passed
+      const scorePercentage = (state.score / state.questions.length) * 100;
+      const passedQuiz = scorePercentage >= 80;
+      const isPerfectScore = state.score === state.questions.length;
+      
+      // Update state to show completion screen immediately
+      updateState({ 
+        quizCompleted: true,
+        loadingCompletion: true,
+        currentQuestion: null
+      });
+
+      // Calculate completion data and save results
+      const completeQuiz = async () => {
+        try {
+          const { user, error: userError } = await auth.getCurrentUser();
+          if (userError || !user) {
+            throw new Error('User not found');
+          }
+
+          const quizResult: QuizResult = {
+            score: state.score,
+            totalQuestions: state.questions.length,
+            timeRemaining: state.timeRemaining,
+            passed: passedQuiz,
+            perfectScore: isPerfectScore
+          };
+
+          const completionData = await quizService.completeQuiz(
+            route.params.lessonId,
+            quizResult
+          );
+
+          // Update state with completion data
+          updateState({
+            completionData,
+            loadingCompletion: false
+          });
+
+          // Update navigation params with XP information
+          navigation.setParams({
+            ...route.params,
+            completed: true,
+            score: completionData.score,
+            totalQuestions: completionData.totalQuestions,
+            xpEarned: completionData.xpEarned,
+            currentXP: completionData.currentXP,
+            newXP: completionData.newXP
+          });
+
+          // Remove automatic navigation
+          // if (passedQuiz) {
+          //   setTimeout(() => {
+          //     navigation.goBack();
+          //   }, 1000);
+          // }
+        } catch (error) {
+          console.error('Error in quiz completion:', error);
+          // Even if saving fails, show the completion screen with error state
+          updateState({
+            loadingCompletion: false,
+            completionData: {
+              score: state.score,
+              totalQuestions: state.questions.length,
+              xpEarned: 0,
+              timeBonus: 0,
+              perfectScore: isPerfectScore,
+              passedQuiz,
+              previousBestScore: 0,
+              attemptsCount: 0,
+              currentXP: 0,
+              newXP: 0,
+              recommendations: [
+                "Възникна грешка при запазване на резултата.",
+                "Моля, опитайте отново по-късно."
+              ],
+              tips: [
+                "Вашият резултат е записан локално.",
+                "Можете да опитате отново по-късно."
+              ]
+            }
+          });
+        }
+      };
+
+      // Start the completion process
+      completeQuiz();
     }
   };
 
   const saveQuizResults = async () => {
+    // This function is now just a wrapper for the completion logic
+    // The actual logic has been moved to handleNextQuestion
+    console.log('saveQuizResults is deprecated, using handleNextQuestion instead');
+  };
+
+  const checkPreviousAttempts = async () => {
+    console.log('checkPreviousAttempts: Starting check for lessonId:', route.params.lessonId);
+    
+    // For regular quizzes, we don't need to check attempts
+    if (route.params.lessonId !== 'daily-challenge') {
+      console.log('checkPreviousAttempts: This is a regular quiz, no need to check attempts');
+      updateState({ loadingAttempts: false });
+      return;
+    }
+
+    console.log('checkPreviousAttempts: This is a daily challenge quiz');
+    updateState({ loadingAttempts: true });
+    
     try {
-      const { user, error: userError } = await auth.getCurrentUser();
-      if (userError) throw userError;
-      if (!user) {
-        navigation.reset({
-          index: 0,
-          routes: [{ name: 'SignIn' }],
-        });
-        return;
-      }
-
-      if (route.params.lessonId === 'daily-challenge') {
-        // Use personalityAnswers instead of selectedAnswers
-        const answers = state.selectedAnswers.filter((answer: string) => answer !== undefined);
-        
-        const counts = {
-          A: answers.filter((a: string) => a === 'A').length,
-          B: answers.filter((a: string) => a === 'B').length,
-          C: answers.filter((a: string) => a === 'C').length
-        };
-
-        console.log('Answer counts:', counts); // Debug log
-
-        let personalityType = '';
-        let description = '';
-        let explanation = '';
-        let recommendations: string[] = [];
-        let tips: string[] = [];
-        let color = '';
-
-        // Determine personality type based on actual answer counts
-        if (counts.A > counts.B && counts.A > counts.C) {
-          personalityType = 'Импулсивен харчещ';
-          description = 'Парите за теб са начин да се наслаждаваш на живота, но внимавай – прекаленият импулс може да води до стрес и дългове.';
-          explanation = 'Повечето от твоите отговори показват, че имаш склонност към импулсивно харчене. Например, когато получиш неочаквани пари, предпочиташ да ги похарчиш веднага за нещо приятно. Също така, когато си под стрес, използваш пазаруването като начин да се почувстваш по-добре. Това показва, че гледаш на парите предимно като средство за незабавно удоволствие.';
-          recommendations = [
-            'Помисли за по-дългосрочни цели',
-            'Създай бюджет и се придържай към него',
-            'Изчаквай 24 часа преди да направиш голяма покупка'
-          ];
-          tips = [
-            'Започни с малки стъпки към по-добро финансово планиране',
-            'Създай спестовна сметка за неочаквани разходи',
-            'Следвай своите разходи за един месец, за да разбереш къде отиват парите'
-          ];
-          color = '#FF6B6B';
-        } else if (counts.B > counts.A && counts.B > counts.C) {
-          personalityType = 'Балансиран реалист';
-          description = 'Имаш разумно отношение към парите, но може биometimes се колебаеш.';
-          explanation = 'Твоите отговори показват балансиран подход към финансите. Например, когато получиш неочаквани пари, предпочиташ да ги разделиш – част за харчене, част за спестяване. При стресови ситуацииometimes се изкушаваш да пазаруваш, но се стараеш да се контролираш. Това показва, че умееш да балансираш между удоволствието от харчене и отговорността към бъдещето.';
-          recommendations = [
-            'Усъвършенствай планирането',
-            'Създай ясни финансови цели',
-            'Разгледай възможности за инвестиране'
-          ];
-          tips = [
-            'Запази част от дохода си автоматично',
-            'Диверсифицирай спестяванията си',
-            'Редовно преглеждай финансовите си цели'
-          ];
-          color = '#FFD700';
-        } else if (counts.C > counts.A && counts.C > counts.B) {
-          personalityType = 'Стратегически планиращ';
-          description = 'Ти си дисциплиниран и гледаш на парите като на инструмент, а не само източник на удоволствие.';
-          explanation = 'Твоите отговори показват силна склонност към стратегическо планиране. Например, когато получиш неочаквани пари, предпочиташ да ги спестиш или инвестираш. При стресови ситуации имаш други начини да се справяш, различни от пазаруването. Това показва, че гледаш на парите като на инструмент за постигане на дългосрочни цели и финансова сигурност.';
-          recommendations = [
-            'Продължавай да инвестираш в знания',
-            'Разгледай по-сложни инвестиционни стратегии',
-            'Помогни на другите да подобрят финансовото си поведение'
-          ];
-          tips = [
-            'Разгледай възможности за пасивен доход',
-            'Създай финансов план за дългосрочни цели',
-            'Диверсифицирай инвестициите си'
-          ];
-          color = '#4CAF50';
-        } else {
-          // If there's a tie, determine based on specific answers
-          const hasImpulsiveAnswers = state.selectedAnswers.includes('A') && (state.selectedAnswers[0] === 'A' || state.selectedAnswers[2] === 'A');
-          const hasStrategicAnswers = state.selectedAnswers.includes('C') && (state.selectedAnswers[0] === 'C' || state.selectedAnswers[4] === 'C');
-          
-          if (hasImpulsiveAnswers) {
-            personalityType = 'Импулсивен харчещ';
-            // ... rest of impulsive spender data ...
-          } else if (hasStrategicAnswers) {
-            personalityType = 'Стратегически планиращ';
-            // ... rest of strategic planner data ...
-          } else {
-            personalityType = 'Балансиран реалист';
-            // ... rest of balanced realist data ...
-          }
-        }
-
-        // Create completion data with all necessary fields
-        const completionData: QuizCompletionData = {
-          score: 0,
-          totalQuestions: state.questions.length,
-          xpEarned: 250,
-          timeBonus: 0,
-          perfectScore: false,
-          passedQuiz: true,
-          previousBestScore: 0,
-          attemptsCount: 0,
-          personalityType,
-          description,
-          explanation,
-          recommendations,
-          tips,
-          personalityColor: color
-        };
-
-        // Set completion data immediately
-        setState({ ...state, completionData });
-
-        // Save quiz attempt and update profile
-        await database.saveQuizAttempt({
-          profile_id: user.id,
-          quiz_id: route.params.lessonId,
-          score: 0,
-          total_questions: state.questions.length,
-          time_taken: 60 - state.timeRemaining,
-          personality_type: personalityType
-        });
-
-        await database.addLearningActivity({
-          user_id: user.id,
-          activity_type: 'quiz',
-          quiz_id: route.params.lessonId,
-          xp_earned: 250
-        });
-
-        const { data: profile, error: profileError } = await database.getProfile(user.id);
-        if (profileError) throw profileError;
-
-        if (profile) {
-          const typedProfile = profile as Profile;
-          const completedQuizzes = typedProfile.completed_quizzes || 0;
-
-          await database.updateProfile(user.id, {
-            xp: 250,
-            completed_quizzes: completedQuizzes + 1
-          } as ProfileUpdate);
-        }
-
-        return;
-      }
-
-      // For regular quizzes, use the existing completion logic
-      const completionData = await calculateQuizCompletion(user.id);
-      setState({ ...state, completionData });
-
-      // Save quiz attempt for regular quizzes
-      await database.saveQuizAttempt({
-        profile_id: user.id,
-        quiz_id: route.params.lessonId,
-        score: state.score,
-        total_questions: state.questions.length,
-        time_taken: 60 - state.timeRemaining,
-        personality_type: completionData.personalityType
+      const hasAttempted = await quizService.checkPreviousAttempts(route.params.lessonId);
+      console.log('checkPreviousAttempts: Has attempted:', hasAttempted);
+      updateState({ 
+        hasAttemptedTest: hasAttempted,
+        loadingAttempts: false 
       });
-
-      // Only update profile and record activity if XP was earned for regular quizzes
-      if (completionData.passedQuiz && completionData.xpEarned > 0) {
-        await database.addLearningActivity({
-          user_id: user.id,
-          activity_type: 'quiz',
-          quiz_id: route.params.lessonId,
-          xp_earned: completionData.xpEarned
-        });
-
-        const { data: profile, error: profileError } = await database.getProfile(user.id);
-        if (profileError) throw profileError;
-
-        if (profile) {
-          const typedProfile = profile as Profile;
-          const completedQuizzes = typedProfile.completed_quizzes || 0;
-
-          await database.updateProfile(user.id, {
-            xp: completionData.xpEarned,
-            completed_quizzes: completedQuizzes + 1
-          } as ProfileUpdate);
-        }
-      }
-
-      setState({ ...state, quizCompleted: true });
     } catch (err) {
-      console.error('Error completing quiz:', err);
+      console.error('checkPreviousAttempts: Error:', err);
       Alert.alert(
         'Error',
-        'Failed to record quiz completion. Please try again.',
+        'Failed to check previous attempts. Please try again.',
         [{ text: 'OK' }]
       );
+      updateState({ loadingAttempts: false });
     }
   };
 
-  // Modify the checkPreviousAttempts function to properly set all personality data
-  const checkPreviousAttempts = async () => {
-    if (route.params.lessonId === 'daily-challenge') {
-      setState({ ...state, loadingAttempts: true });
-      try {
-        const { user, error: userError } = await auth.getCurrentUser();
-        if (userError) throw userError;
-        if (!user) {
-          navigation.reset({
-            index: 0,
-            routes: [{ name: 'SignIn' }],
-          });
-          return;
-        }
-
-        // Check if user has already taken the personality test
-        const { data: attempts, error: attemptsError } = await database.getQuizAttempts(user.id);
-        if (attemptsError) throw attemptsError;
-
-        const hasAttempted = (attempts as QuizAttempt[] || []).some(
-          attempt => attempt.quiz_id === 'daily-challenge'
-        );
-
-        if (hasAttempted) {
-          setState({ ...state, hasAttemptedTest: true });
-          // Load the previous attempt data
-          const previousAttempt = (attempts as QuizAttempt[]).find(
-            attempt => attempt.quiz_id === 'daily-challenge'
-          );
-          
-          if (previousAttempt) {
-            // Set personality type specific data based on the stored type
-            let description = '';
-            let explanation = '';
-            let recommendations: string[] = [];
-            let tips: string[] = [];
-            let color = '';
-
-            switch (previousAttempt.personality_type) {
-              case 'Импулсивен харчещ':
-                description = 'Парите за теб са начин да се наслаждаваш на живота, но внимавай – прекаленият импулс може да води до стрес и дългове.';
-                explanation = 'Повечето от твоите отговори показват, че имаш склонност към импулсивно харчене. Например, когато получиш неочаквани пари, предпочиташ да ги похарчиш веднага за нещо приятно. Също така, когато си под стрес, използваш пазаруването като начин да се почувстваш по-добре. Това показва, че гледаш на парите предимно като средство за незабавно удоволствие.';
-                recommendations = [
-                  'Помисли за по-дългосрочни цели',
-                  'Създай бюджет и се придържай към него',
-                  'Изчаквай 24 часа преди да направиш голяма покупка'
-                ];
-                tips = [
-                  'Започни с малки стъпки към по-добро финансово планиране',
-                  'Създай спестовна сметка за неочаквани разходи',
-                  'Следвай своите разходи за един месец, за да разбереш къде отиват парите'
-                ];
-                color = '#FF6B6B';
-                break;
-              case 'Балансиран реалист':
-                description = 'Имаш разумно отношение към парите, но може биometimes се колебаеш.';
-                explanation = 'Твоите отговори показват балансиран подход към финансите. Например, когато получиш неочаквани пари, предпочиташ да ги разделиш – част за харчене, част за спестяване. При стресови ситуацииometimes се изкушаваш да пазаруваш, но се стараеш да се контролираш. Това показва, че умееш да балансираш между удоволствието от харчене и отговорността към бъдещето.';
-                recommendations = [
-                  'Усъвършенствай планирането',
-                  'Създай ясни финансови цели',
-                  'Разгледай възможности за инвестиране'
-                ];
-                tips = [
-                  'Запази част от дохода си автоматично',
-                  'Диверсифицирай спестяванията си',
-                  'Редовно преглеждай финансовите си цели'
-                ];
-                color = '#FFD700';
-                break;
-              case 'Стратегически планиращ':
-                description = 'Ти си дисциплиниран и гледаш на парите като на инструмент, а не само източник на удоволствие.';
-                explanation = 'Твоите отговори показват силна склонност към стратегическо планиране. Например, когато получиш неочаквани пари, предпочиташ да ги спестиш или инвестираш. При стресови ситуации имаш други начини да се справяш, различни от пазаруването. Това показва, че гледаш на парите като на инструмент за постигане на дългосрочни цели и финансова сигурност.';
-                recommendations = [
-                  'Продължавай да инвестираш в знания',
-                  'Разгледай по-сложни инвестиционни стратегии',
-                  'Помогни на другите да подобрят финансовото си поведение'
-                ];
-                tips = [
-                  'Разгледай възможности за пасивен доход',
-                  'Създай финансов план за дългосрочни цели',
-                  'Диверсифицирай инвестициите си'
-                ];
-                color = '#4CAF50';
-                break;
-            }
-
-            setState({
-              ...state,
-              completionData: {
-                score: 0,
-                totalQuestions: state.questions.length,
-                xpEarned: 250,
-                timeBonus: 0,
-                perfectScore: false,
-                passedQuiz: true,
-                previousBestScore: 0,
-                attemptsCount: 1,
-                personalityType: previousAttempt.personality_type || '',
-                description,
-                explanation,
-                recommendations,
-                tips,
-                personalityColor: color
-              },
-              quizCompleted: true
-            });
-          }
-        }
-      } catch (err) {
-        console.error('Error checking previous attempts:', err);
-        Alert.alert(
-          'Error',
-          'Failed to check previous attempts. Please try again.',
-          [{ text: 'OK' }]
-        );
-      } finally {
-        setState({ ...state, loadingAttempts: false });
-      }
+  // Add useEffect to load questions from route params
+  useEffect(() => {
+    console.log('QuizScreen: Received route params:', route.params);
+    console.log('QuizScreen: Current state:', state);
+    
+    if (route.params.questions) {
+      console.log('QuizScreen: Questions received:', route.params.questions);
+      const questions = route.params.questions;
+      setState(prev => {
+        const newState = {
+          ...prev,
+          loading: false,
+          questions: questions,
+          currentQuestion: questions[0] || null,
+          currentQuestionIndex: 0,
+          selectedAnswer: null,
+          selectedAnswers: [],
+          matchingAnswers: {},
+          score: 0,
+          quizCompleted: false,
+          showResult: false,
+          timeRemaining: 60,
+          answeredCorrectly: false
+        };
+        console.log('QuizScreen: New state after setting questions:', newState);
+        return newState;
+      });
+    } else {
+      console.log('QuizScreen: No questions received in route params');
+      setState(prev => {
+        const newState = {
+          ...prev,
+          loading: false,
+          error: 'No questions available for this quiz',
+          currentQuestion: null
+        };
+        console.log('QuizScreen: New state after setting error:', newState);
+        return newState;
+      });
     }
-  };
+  }, [route.params.questions]);
 
   // Add useEffect to check for previous attempts
   useEffect(() => {
+    console.log('QuizScreen: Checking previous attempts for lessonId:', route.params.lessonId);
     checkPreviousAttempts();
   }, [route.params.lessonId]);
 
@@ -567,16 +415,27 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
   }, [route.params.lessonId]);
 
   const calculateQuizCompletion = async (userId: string): Promise<QuizCompletionData> => {
+    console.log('calculateQuizCompletion: Starting calculation');
     const baseXP = 100;
     const perfectScoreBonus = 50;
     const timeBonus = Math.floor((state.timeRemaining / 60) * 10);
     const scorePercentage = (state.score / state.questions.length) * 100;
     const passedQuiz = scorePercentage >= 80;
+    const isPerfectScore = state.score === state.questions.length;
+
+    console.log('calculateQuizCompletion: Initial values:', {
+      baseXP,
+      perfectScoreBonus,
+      timeBonus,
+      scorePercentage,
+      passedQuiz,
+      isPerfectScore
+    });
 
     // Get previous quiz attempts
     const { data: previousAttempts, error: attemptsError } = await database.getQuizAttempts(userId);
     if (attemptsError) {
-      console.error('Error fetching previous attempts:', attemptsError);
+      console.error('calculateQuizCompletion: Error fetching previous attempts:', attemptsError);
       throw attemptsError;
     }
 
@@ -588,13 +447,18 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
       ? Math.max(...attempts.map(attempt => (attempt.score / attempt.total_questions) * 100))
       : 0;
 
+    console.log('calculateQuizCompletion: Previous attempts data:', {
+      attemptsCount: attempts.length,
+      previousBestScore
+    });
+
     let xpEarned = 0;
     if (passedQuiz) {
       // Calculate XP based on score improvement
       if (attempts.length === 0) {
         // First attempt - award full XP
         xpEarned = baseXP + timeBonus;
-        if (state.score === state.questions.length) {
+        if (isPerfectScore) {
           xpEarned += perfectScoreBonus;
         }
       } else if (scorePercentage > previousBestScore) {
@@ -604,12 +468,18 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
         xpEarned = Math.max(0, currentXP - previousXP);
         
         // Add time bonus and perfect score bonus if applicable
-        if (state.score === state.questions.length && previousBestScore < 100) {
+        if (isPerfectScore && previousBestScore < 100) {
           xpEarned += perfectScoreBonus;
         }
         xpEarned += timeBonus;
       }
     }
+
+    console.log('calculateQuizCompletion: XP calculation:', {
+      xpEarned,
+      isPerfectScore,
+      passedQuiz
+    });
 
     const recommendations: string[] = [];
     const tips: string[] = [];
@@ -644,369 +514,392 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
           "Направете бележки по време на урока за по-лесно запомняне."
         );
       }
-    } else if (scorePercentage >= 90) {
-      recommendations.push(
-        "Отлично представяне! Можете да продължите към по-напреднали теми.",
-        "Пробвайте ежедневните предизвикателства за допълнителна XP."
-      );
-      tips.push(
-        "Запазете знанията си свежи, като редовно преглеждате материалите.",
-        "Споделете успеха си с приятели и покани ги да се присъединят!"
-      );
     } else {
-      recommendations.push(
-        "Добър резултат! Прегледайте грешните отговори за по-добро разбиране.",
-        "Пробвайте урока отново за по-добро усвояване на материала."
-      );
-      tips.push(
-        "Фокусирайте се върху темите, в които имате затруднения.",
-        "Направете бележки по време на урока за по-лесно запомняне."
-      );
+      // First attempt and passed
+      if (isPerfectScore) {
+        recommendations.push(
+          "Перфектен резултат! Отлично представяне!",
+          "Продължете към по-напреднали теми за още знания."
+        );
+        tips.push(
+          "Вашите знания са на отлично ниво - споделете ги с други!",
+          "Пробвайте ежедневните предизвикателства за допълнителна XP.",
+          "Помогнете на други потребители в общността."
+        );
+      } else {
+        recommendations.push(
+          "Отлично представяне! Можете да продължите към по-напреднали теми.",
+          "Пробвайте ежедневните предизвикателства за допълнителна XP."
+        );
+        tips.push(
+          "Запазете знанията си свежи, като редовно преглеждате материалите.",
+          "Споделете успеха си с приятели и покани ги да се присъединят!"
+        );
+      }
     }
 
-    return {
+    const completionData: QuizCompletionData = {
       score: state.score,
       totalQuestions: state.questions.length,
       xpEarned,
       timeBonus,
-      perfectScore: state.score === state.questions.length,
+      perfectScore: isPerfectScore,
       passedQuiz,
       previousBestScore,
       attemptsCount: attempts.length,
       recommendations,
       tips
     };
+
+    console.log('calculateQuizCompletion: Final completion data:', completionData);
+    return completionData;
   };
 
   const renderQuizCompletion = () => {
-    if (state.loadingCompletion || !state.completionData) {
+    console.log('renderQuizCompletion: Starting render with state:', {
+      loadingCompletion: state.loadingCompletion,
+      hasCompletionData: !!state.completionData,
+      quizCompleted: state.quizCompleted
+    });
+
+    if (state.loadingCompletion) {
+      console.log('renderQuizCompletion: Still loading completion data');
       return (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
+          <ActivityIndicator size="large" color={themeColors.primary} />
+          <Text style={styles.loadingText}>Обработка на резултата...</Text>
+        </View>
+      );
+    }
+
+    if (!state.completionData) {
+      console.log('renderQuizCompletion: No completion data available');
+      return (
+        <View style={styles.loadingContainer}>
+          <Text style={styles.errorText}>Грешка при зареждане на резултата</Text>
         </View>
       );
     }
 
     const { completionData } = state;
-
-    if (route.params.lessonId === 'daily-challenge') {
-      return (
-        <View style={styles.completionContainer}>
-          <Surface style={styles.resultCard}>
-            <View style={[styles.personalityHeader, { backgroundColor: completionData.personalityColor }]}>
-              <Text style={styles.personalityTitle}>{completionData.personalityType}</Text>
-            </View>
-            
-            <Text style={styles.personalityDescription}>{completionData.description}</Text>
-            
-            <View style={styles.explanationContainer}>
-              <Text style={styles.explanationText}>{completionData.explanation}</Text>
-            </View>
-            
-            <View style={styles.recommendationsContainer}>
-              <Text style={styles.sectionTitle}>Препоръки</Text>
-              {completionData.recommendations.map((rec, index) => (
-                <View key={index} style={styles.recommendationItem}>
-                  <MaterialCommunityIcons 
-                    name="lightbulb" 
-                    size={20} 
-                    color={completionData.personalityColor} 
-                  />
-                  <Text style={styles.recommendationText}>{rec}</Text>
-                </View>
-              ))}
-            </View>
-            
-            <View style={styles.tipsContainer}>
-              <Text style={styles.sectionTitle}>Съвети</Text>
-              {completionData.tips.map((tip, index) => (
-                <View key={index} style={styles.tipItem}>
-                  <MaterialCommunityIcons 
-                    name="school" 
-                    size={20} 
-                    color={completionData.personalityColor} 
-                  />
-                  <Text style={styles.tipText}>{tip}</Text>
-                </View>
-              ))}
-            </View>
-            
-            <View style={styles.xpContainer}>
-              <MaterialCommunityIcons name="star" size={24} color="#FFD700" />
-              <Text style={styles.xpText}>Спечелихте {completionData.xpEarned} XP!</Text>
-            </View>
-
-            <Button
-              mode="contained"
-              onPress={() => navigation.goBack()}
-              style={[styles.completionButton, { backgroundColor: completionData.personalityColor }]}
-            >
-              Завърши
-            </Button>
-          </Surface>
-        </View>
-      );
-    }
-
     const scorePercentage = (completionData.score / completionData.totalQuestions) * 100;
+    const isPerfect = completionData.perfectScore;
+    const passedQuiz = completionData.passedQuiz;
+
+    // Define colors based on result
+    const primaryColor = passedQuiz ? (isPerfect ? "#4CAF50" : "#4CAF50") : "#FF6B6B";
+    const secondaryColor = passedQuiz ? (isPerfect ? "#E8F5E9" : "#E8F5E9") : "#FFEBEE";
+    const textColor = passedQuiz ? (isPerfect ? "#1B5E20" : "#1B5E20") : "#C62828";
 
     return (
-      <View style={styles.completionContainer}>
-        <Surface style={styles.resultCard}>
-          <View style={styles.completionHeader}>
+      <ScrollView 
+        ref={scrollViewRef}
+        style={styles.completionContainer}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={true}
+        bounces={true}
+      >
+        <Surface style={[styles.resultCard, { backgroundColor: secondaryColor }]}>
+          {/* Header Section */}
+          <View style={[styles.completionHeader, { backgroundColor: primaryColor }]}>
             <MaterialCommunityIcons 
-              name={completionData.passedQuiz ? (completionData.perfectScore ? "trophy" : "star") : "alert-circle"} 
+              name={isPerfect ? "trophy" : (passedQuiz ? "check-circle" : "alert-circle")} 
               size={48} 
-              color={completionData.passedQuiz ? (completionData.perfectScore ? "#FFD700" : "#8A97FF") : "#FF6B6B"} 
+              color="#FFFFFF" 
             />
             <Title style={styles.completionTitle}>
-              {completionData.passedQuiz 
-                ? (completionData.perfectScore ? "Перфектен резултат!" : "Тест завършен!")
-                : "Тестът не е преминат"}
+              {isPerfect 
+                ? "Перфектен резултат!" 
+                : (passedQuiz ? "Тест завършен успешно!" : "Тестът не е преминат")}
             </Title>
           </View>
 
-          <View style={styles.scoreContainer}>
-            <Text style={styles.scoreText}>
-              {completionData.score} от {completionData.totalQuestions} точки
-            </Text>
-            <Text style={[
-              styles.scorePercentage,
-              { color: completionData.passedQuiz ? "#8A97FF" : "#FF6B6B" }
-            ]}>
-              {Math.round(scorePercentage)}%
-            </Text>
+          {/* Score Section */}
+          <View style={styles.scoreSection}>
+            <View style={styles.scoreCircle}>
+              <Text style={[styles.scorePercentage, { color: textColor }]}>
+                {Math.round(scorePercentage)}%
+              </Text>
+              <Text style={styles.scoreLabel}>
+                {completionData.score} от {completionData.totalQuestions}
+              </Text>
+            </View>
+            
             {completionData.attemptsCount > 0 && (
               <Text style={styles.previousScoreText}>
                 Предишен най-добър резултат: {Math.round(completionData.previousBestScore)}%
               </Text>
             )}
-            {!completionData.passedQuiz && (
+            
+            {!passedQuiz && (
               <Text style={styles.passingScoreText}>
                 Необходими са поне 80% за преминаване
               </Text>
             )}
           </View>
 
-          {completionData.passedQuiz && completionData.xpEarned > 0 && (
-            <View style={styles.xpContainer}>
+          {/* XP Section - Only show if passed */}
+          {passedQuiz && completionData.xpEarned > 0 && (
+            <View style={styles.xpSection}>
               <MaterialCommunityIcons name="star" size={24} color="#FFD700" />
-              <Text style={styles.xpText}>
-                Печелите {completionData.xpEarned} XP
-              </Text>
-              {completionData.timeBonus > 0 && (
-                <Text style={styles.bonusText}>
-                  (+{completionData.timeBonus} бонус за бързина)
+              <View style={styles.xpTextContainer}>
+                <Text style={styles.xpText}>
+                  Печелите {completionData.xpEarned} XP
                 </Text>
-              )}
+                {completionData.currentXP !== undefined && completionData.newXP !== undefined && (
+                  <Text style={styles.xpTotalText}>
+                    Нова XP: {completionData.newXP}
+                  </Text>
+                )}
+                {completionData.timeBonus > 0 && (
+                  <Text style={styles.bonusText}>
+                    (+{completionData.timeBonus} бонус за бързина)
+                  </Text>
+                )}
+              </View>
             </View>
           )}
 
-          <View style={styles.recommendationsContainer}>
-            <Title style={styles.sectionTitle}>Препоръки</Title>
+          {/* Recommendations Section */}
+          <View style={styles.recommendationsSection}>
+            <View style={styles.sectionHeader}>
+              <MaterialCommunityIcons name="lightbulb" size={24} color={primaryColor} />
+              <Text style={[styles.sectionTitle, { color: textColor }]}>Препоръки</Text>
+            </View>
             {completionData.recommendations.map((rec, index) => (
               <View key={index} style={styles.recommendationItem}>
-                <MaterialCommunityIcons name="lightbulb" size={20} color="#8A97FF" />
+                <MaterialCommunityIcons 
+                  name="check-circle" 
+                  size={20} 
+                  color={primaryColor} 
+                />
                 <Text style={styles.recommendationText}>{rec}</Text>
               </View>
             ))}
           </View>
 
-          <View style={styles.tipsContainer}>
-            <Title style={styles.sectionTitle}>Съвети</Title>
+          {/* Tips Section */}
+          <View style={styles.tipsSection}>
+            <View style={styles.sectionHeader}>
+              <MaterialCommunityIcons name="school" size={24} color={primaryColor} />
+              <Text style={[styles.sectionTitle, { color: textColor }]}>Съвети</Text>
+            </View>
             {completionData.tips.map((tip, index) => (
               <View key={index} style={styles.tipItem}>
-                <MaterialCommunityIcons name="school" size={20} color="#FFE266" />
+                <MaterialCommunityIcons 
+                  name="arrow-right" 
+                  size={20} 
+                  color={primaryColor} 
+                />
                 <Text style={styles.tipText}>{tip}</Text>
               </View>
             ))}
           </View>
 
+          {/* Action Button */}
+          <View style={styles.actionButtonsContainer}>
+            {passedQuiz ? (
+              <Button
+                mode="contained"
+                onPress={() => navigation.goBack()}
+                style={[styles.completionButton, { backgroundColor: primaryColor }]}
+                labelStyle={styles.completionButtonLabel}
+                icon="home"
+              >
+                Към началната страница
+              </Button>
+            ) : (
+              <>
           <Button
             mode="contained"
             onPress={() => {
-              if (completionData.passedQuiz) {
-                navigation.goBack();
-              } else {
-                // Reset quiz state and restart
                 setState({
                   ...state,
                   currentQuestionIndex: 0,
+                      currentQuestion: state.questions[0],
                   selectedAnswer: null,
                   selectedAnswers: [],
                   matchingAnswers: {},
                   score: 0,
                   showResult: false,
                   timeRemaining: 60,
+                      quizCompleted: false,
                   completionData: null,
                   answeredCorrectly: false
                 });
-              }
             }}
-            style={styles.completionButton}
-            icon="home"
+                  style={[styles.completionButton, { backgroundColor: primaryColor }]}
+                  labelStyle={styles.completionButtonLabel}
+                  icon="refresh"
           >
-            {completionData.passedQuiz ? "Към началната страница" : "Опитайте отново"}
+                  Опитайте отново
           </Button>
+                <Button
+                  mode="contained"
+                  onPress={() => navigation.goBack()}
+                  style={[styles.completionButton, { backgroundColor: primaryColor, marginTop: 12 }]}
+                  labelStyle={styles.completionButtonLabel}
+                  icon="book-open-page-variant"
+                >
+                  Обратно към урока
+                </Button>
+              </>
+            )}
+          </View>
         </Surface>
-      </View>
+      </ScrollView>
     );
   };
 
   const renderMatchingQuestion = () => {
-    if (!state.currentQuestion || !state.currentQuestion.pairs) return null;
+    if (!state.currentQuestion) return null;
 
+    // For now, we'll just show a message that matching questions are not supported yet
     return (
       <View style={styles.matchingContainer}>
-        {state.currentQuestion.pairs.map((pair: MatchingPair, index: number) => (
-          <View key={index} style={styles.matchingPair}>
-            <Text style={styles.matchingSituation}>{pair.situation}</Text>
-            <View style={styles.matchingOptions}>
-              {state.currentQuestion && state.currentQuestion.options.map((answer: string, optionIndex: number) => (
-                <TouchableOpacity
-                  key={optionIndex}
-                  style={[
-                    styles.matchingButton,
-                    state.matchingAnswers[pair.situation] === answer && styles.matchingButtonSelected
-                  ]}
-                  onPress={() => handleAnswerSelect(answer)}
-                >
-                  <Text style={[
-                    styles.matchingButtonText,
-                    state.matchingAnswers[pair.situation] === answer && styles.matchingButtonTextSelected
-                  ]}>
-                    {answer}
+        <Text style={styles.matchingText}>
+          Matching questions are not supported in this version.
                   </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          </View>
-        ))}
       </View>
     );
   };
 
   const renderQuestion = () => {
+    // First check if quiz is completed - this should take priority
+    if (state.quizCompleted) {
+      return renderQuizCompletion();
+    }
+
     if (state.loadingAttempts) {
       return (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
+          <ActivityIndicator size="large" color={themeColors.primary} />
         </View>
       );
     }
 
     if (!state.currentQuestion) {
-      return null;
+      return (
+        <View style={styles.loadingContainer}>
+          <Text style={styles.errorText}>No questions available</Text>
+        </View>
+      );
     }
 
-    // If the test was previously taken, immediately show the completion screen
-    if (route.params.lessonId === 'daily-challenge' && state.hasAttemptedTest) {
-      return renderQuizCompletion();
-    }
+    const currentQuestion = state.currentQuestion;
 
     return (
       <View style={styles.questionContainer}>
-        {state.showResult && route.params.lessonId !== 'daily-challenge' && (
-          <View style={[
-            styles.resultContainer,
-            { backgroundColor: state.answeredCorrectly ? '#e8f5e9' : '#ffebee' }
-          ]}>
-            <Text style={[
-              styles.resultText,
-              { color: state.answeredCorrectly ? '#2e7d32' : '#c62828' }
-            ]}>
-              {state.answeredCorrectly ? 'Правилен отговор!' : 'Грешен отговор'}
+        <Surface style={[styles.questionCard, { backgroundColor: themeColors.surface }]}>
+          <View style={styles.questionHeader}>
+            <Text style={styles.questionNumber}>
+              Въпрос {state.currentQuestionIndex + 1} от {state.questions.length}
             </Text>
-            {!state.answeredCorrectly && state.currentQuestion && state.currentQuestion.explanation && (
-              <>
-                <Text style={styles.explanationText}>
-                  {state.currentQuestion.explanation}
-                </Text>
-                <Button
-                  mode="contained"
-                  onPress={handleNextQuestion}
-                  style={[styles.nextButton, { backgroundColor: colors.primary }]}
-                >
-                  Следващ въпрос
-                </Button>
-              </>
-            )}
+            <View style={styles.timerContainer}>
+              <MaterialCommunityIcons name="clock-outline" size={20} color={themeColors.primary} />
+              <Text style={styles.timerText}>{state.timeRemaining} сек</Text>
           </View>
-        )}
+          </View>
 
-        {state.currentQuestion && (
-          <Card style={[styles.questionCard, { backgroundColor: '#fff' }]}> 
-            <Card.Content>
-              <Title style={[styles.questionText, { color: '#000' }]}>{state.currentQuestion!.question}</Title>
-              {state.currentQuestion!.type === 'matching' ? (
+          <View style={styles.questionContent}>
+            <Title style={[styles.questionText, { color: '#222' }]}>
+              {currentQuestion.question}
+            </Title>
+            
+            {currentQuestion.type === 'matching' ? (
                 renderMatchingQuestion()
               ) : (
                 <View style={styles.optionsContainer}>
-                  {state.currentQuestion!.options.map((option: string, index: number) => (
+                {currentQuestion.options.map((option: string, index: number) => (
                     <TouchableOpacity
                       key={index}
                       style={[
                         styles.optionButton,
-                        state.currentQuestion!.type === 'multiple' 
+                      currentQuestion.type === 'multiple' 
                           ? state.selectedAnswers.includes(option) && styles.optionButtonSelected
                           : state.selectedAnswer === option && styles.optionButtonSelected
                       ]}
                       onPress={() => handleAnswerSelect(option)}
                     >
+                    <View style={styles.optionContent}>
+                      <MaterialCommunityIcons 
+                        name={currentQuestion.type === 'multiple' 
+                          ? (state.selectedAnswers.includes(option) ? "checkbox-marked-circle" : "checkbox-blank-circle-outline")
+                          : (state.selectedAnswer === option ? "radiobox-marked" : "radiobox-blank")
+                        } 
+                        size={24} 
+                        color={currentQuestion.type === 'multiple' 
+                          ? (state.selectedAnswers.includes(option) ? themeColors.primary : "#666")
+                          : (state.selectedAnswer === option ? themeColors.primary : "#666")
+                        } 
+                      />
                       <Text style={[
                         styles.optionText,
-                        state.currentQuestion!.type === 'multiple'
+                        currentQuestion.type === 'multiple'
                           ? state.selectedAnswers.includes(option) && styles.optionTextSelected
                           : state.selectedAnswer === option && styles.optionTextSelected
                       ]}>
                         {option}
                       </Text>
+                    </View>
                     </TouchableOpacity>
                   ))}
                 </View>
               )}
-            </Card.Content>
-          </Card>
-        )}
+          </View>
 
-        {!state.showResult && route.params.lessonId !== 'daily-challenge' && (
+          {state.showResult && (
+            <View style={[
+              styles.resultContainer,
+              { backgroundColor: state.answeredCorrectly ? '#e8f5e9' : '#ffebee' }
+            ]}>
+              <Text style={[
+                styles.resultText,
+                { color: state.answeredCorrectly ? '#2e7d32' : '#c62828' }
+              ]}>
+                {state.answeredCorrectly ? 'Правилен отговор!' : 'Грешен отговор'}
+              </Text>
+              {!state.answeredCorrectly && currentQuestion.explanation && (
+                <Text style={styles.explanationText}>
+                  {currentQuestion.explanation}
+                </Text>
+              )}
+            </View>
+          )}
+
+          <View style={styles.navigationButtons}>
+            {!state.showResult ? (
           <Button
             mode="contained"
             onPress={handleAnswerSubmit}
-            style={[styles.submitButton, { backgroundColor: colors.primary }]}
-            disabled={(!state.currentQuestion) || (!state.selectedAnswer && state.selectedAnswers.length === 0)}
+                style={[styles.submitButton, { backgroundColor: themeColors.primary }]}
+                labelStyle={styles.submitButtonLabel}
+                disabled={(!currentQuestion) || (!state.selectedAnswer && state.selectedAnswers.length === 0)}
+                icon="check"
           >
             Потвърди
           </Button>
-        )}
+            ) : (
+              <Button
+                mode="contained"
+                onPress={handleNextQuestion}
+                style={[styles.nextButton, { backgroundColor: themeColors.primary }]}
+                labelStyle={styles.nextButtonLabel}
+                icon="arrow-right"
+              >
+                {state.currentQuestionIndex < state.questions.length - 1 ? 'Следващ въпрос' : 'Завърши теста'}
+              </Button>
+            )}
+          </View>
+        </Surface>
       </View>
     );
   };
 
-  return (
-    <View style={styles.container}>
-      <ScrollView 
-        style={styles.mainScrollView}
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={true}
-        bounces={true}
-      >
-        <View style={styles.contentWrapper}>
-          {renderQuestion()}
-        </View>
-      </ScrollView>
-
-      <BottomNavigationBar 
-        navigation={navigation}
-        activeTab={"quiz" as TabKey}
-      />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+      backgroundColor: themeColors.background,
   },
   mainScrollView: {
     flex: 1,
@@ -1017,199 +910,307 @@ const styles = StyleSheet.create({
   contentWrapper: {
     flex: 1,
   },
-  questionContainer: {
+    loadingContainer: {
     flex: 1,
+      justifyContent: 'center',
+      alignItems: 'center',
   },
-  resultContainer: {
+    questionContainer: {
+      flex: 1,
     padding: 16,
-    borderRadius: 8,
+    },
+    questionCard: {
+      padding: 20,
+      borderRadius: 16,
+      elevation: 2,
     marginBottom: 16,
   },
-  resultText: {
-    fontSize: 18,
-    fontWeight: 'bold',
+    questionHeader: {
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      alignItems: 'center',
     marginBottom: 16,
   },
-  explanationText: {
-    marginBottom: 16,
+    questionNumber: {
+      fontSize: 16,
+      color: '#666',
+      fontWeight: '500',
+    },
+    timerContainer: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: '#f5f5f5',
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: 20,
+    },
+    timerText: {
+      marginLeft: 4,
+      fontSize: 14,
+      color: '#666',
+      fontWeight: '500',
   },
-  nextButton: {
-    marginTop: 16,
-  },
-  questionCard: {
-    marginBottom: 16,
+    questionContent: {
+      marginBottom: 20,
   },
   questionText: {
-    fontSize: 18,
+      fontSize: 20,
     fontWeight: 'bold',
-    marginBottom: 16,
+      color: '#222',
+      marginBottom: 20,
+      lineHeight: 28,
   },
   optionsContainer: {
-    marginTop: 16,
-    marginBottom: 16,
+      marginTop: 8,
   },
   optionButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderRadius: 8,
+      marginBottom: 12,
+      borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e0e0e0',
-    backgroundColor: '#f5f5f5',
-    marginBottom: 12,
+      backgroundColor: '#f8f9fa',
+      overflow: 'hidden',
   },
   optionButtonSelected: {
-    backgroundColor: '#8A97FF',
-    borderColor: '#8A97FF',
+      backgroundColor: '#e8f0fe',
+      borderColor: themeColors.primary,
+    },
+    optionContent: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      padding: 16,
   },
   optionText: {
     fontSize: 16,
     color: '#222',
+      marginLeft: 12,
+      flex: 1,
   },
   optionTextSelected: {
-    color: '#fff',
+      color: themeColors.primary,
+      fontWeight: '500',
+    },
+    resultContainer: {
+      padding: 16,
+      borderRadius: 12,
+      marginTop: 16,
+      marginBottom: 16,
+    },
+    resultText: {
+      fontSize: 18,
     fontWeight: 'bold',
+      marginBottom: 8,
+    },
+    explanationText: {
+      fontSize: 14,
+      color: '#666',
+      lineHeight: 20,
+    },
+    navigationButtons: {
+      marginTop: 20,
   },
   submitButton: {
-    marginTop: 16,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+      borderRadius: 12,
+      paddingVertical: 8,
+    },
+    submitButtonLabel: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      fontWeight: 'bold',
+    },
+    nextButton: {
+      borderRadius: 12,
+      paddingVertical: 8,
+    },
+    nextButtonLabel: {
+      color: '#FFFFFF',
+      fontSize: 16,
+      fontWeight: 'bold',
+    },
+    errorText: {
+      fontSize: 16,
+      color: '#666',
+      textAlign: 'center',
   },
   completionContainer: {
     flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
+      padding: 16,
+      backgroundColor: '#F5F5F5',
   },
   resultCard: {
-    padding: 16,
-    borderRadius: 8,
-    width: '100%',
-    maxWidth: 400,
+      borderRadius: 24,
+      overflow: 'hidden',
+      elevation: 4,
   },
   completionHeader: {
+      padding: 24,
     alignItems: 'center',
-    marginBottom: 16,
+      borderBottomLeftRadius: 24,
+      borderBottomRightRadius: 24,
   },
   completionTitle: {
-    fontSize: 20,
+      fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 8,
+      color: '#FFFFFF',
+      marginTop: 16,
+      textAlign: 'center',
   },
-  scoreContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    scoreSection: {
+      padding: 24,
     alignItems: 'center',
+    },
+    scoreCircle: {
+      width: 120,
+      height: 120,
+      borderRadius: 60,
+      backgroundColor: '#FFFFFF',
+      justifyContent: 'center',
+      alignItems: 'center',
+      elevation: 2,
     marginBottom: 16,
   },
-  scoreText: {
-    fontSize: 16,
+    scorePercentage: {
+      fontSize: 32,
     fontWeight: 'bold',
   },
-  scorePercentage: {
-    fontSize: 16,
+    scoreLabel: {
+      fontSize: 14,
+      color: '#666',
+      marginTop: 4,
   },
   previousScoreText: {
     fontSize: 14,
     color: '#666',
+      marginTop: 8,
   },
   passingScoreText: {
     fontSize: 14,
-    color: '#666',
+      color: '#FF6B6B',
+      marginTop: 8,
+      fontWeight: '500',
   },
-  xpContainer: {
+    xpSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+      backgroundColor: '#FFFFFF',
+      padding: 16,
+      marginHorizontal: 24,
+      marginBottom: 24,
+      borderRadius: 12,
+      elevation: 2,
+    },
+    xpTextContainer: {
+      marginLeft: 12,
   },
   xpText: {
-    fontSize: 16,
+      fontSize: 18,
     fontWeight: 'bold',
-    marginLeft: 8,
+      color: '#222',
   },
   bonusText: {
     fontSize: 14,
     color: '#666',
-  },
-  recommendationsContainer: {
+      marginTop: 2,
+    },
+    recommendationsSection: {
+      paddingHorizontal: 24,
+      paddingBottom: 24,
+    },
+    tipsSection: {
+      paddingHorizontal: 24,
+      paddingBottom: 24,
+    },
+    sectionHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
     marginBottom: 16,
   },
+    sectionTitle: {
+      fontSize: 20,
+      fontWeight: 'bold',
+      marginLeft: 8,
+    },
   recommendationItem: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
+      alignItems: 'flex-start',
+      marginBottom: 12,
+      backgroundColor: '#FFFFFF',
+      padding: 12,
+      borderRadius: 8,
+      elevation: 1,
   },
   recommendationText: {
+      flex: 1,
     marginLeft: 8,
-  },
-  tipsContainer: {
-    marginBottom: 16,
+      fontSize: 14,
+      lineHeight: 20,
+      color: '#444',
   },
   tipItem: {
     flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8,
+      alignItems: 'flex-start',
+      marginBottom: 12,
+      backgroundColor: '#FFFFFF',
+      padding: 12,
+      borderRadius: 8,
+      elevation: 1,
   },
   tipText: {
+      flex: 1,
     marginLeft: 8,
+      fontSize: 14,
+      lineHeight: 20,
+      color: '#444',
+    },
+    actionButtonsContainer: {
+      margin: 24,
   },
   completionButton: {
-    marginTop: 16,
+      paddingVertical: 8,
+      borderRadius: 12,
   },
-  personalityHeader: {
-    padding: 16,
-    borderRadius: 8,
-    marginBottom: 16,
-  },
-  personalityTitle: {
-    fontSize: 18,
+    completionButtonLabel: {
+      color: '#FFFFFF',
+      fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 8,
+      paddingVertical: 4,
   },
-  personalityDescription: {
+    loadingText: {
+      marginTop: 12,
     fontSize: 16,
     color: '#666',
-  },
-  explanationContainer: {
-    marginBottom: 16,
   },
   matchingContainer: {
     marginBottom: 16,
   },
-  matchingPair: {
-    marginBottom: 8,
-  },
-  matchingSituation: {
+    matchingText: {
     fontSize: 16,
-    fontWeight: 'bold',
+      color: '#666',
   },
-  matchingOptions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  matchingButton: {
-    padding: 12,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-    backgroundColor: '#f5f5f5',
-  },
-  matchingButtonSelected: {
-    backgroundColor: '#8A97FF',
-    borderColor: '#8A97FF',
-  },
-  matchingButtonText: {
+  xpTotalText: {
     fontSize: 16,
-  },
-  matchingButtonTextSelected: {
-    color: '#fff',
+    color: '#4CAF50',
     fontWeight: 'bold',
-  },
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    marginBottom: 12,
-    color: '#222',
+    marginTop: 4
   },
 });
+
+  return (
+    <View style={styles.container}>
+      {state.quizCompleted ? (
+        renderQuizCompletion()
+      ) : (
+        <ScrollView 
+          style={styles.mainScrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={true}
+          bounces={true}
+        >
+          <View style={styles.contentWrapper}>
+            {renderQuestion()}
+          </View>
+        </ScrollView>
+      )}
+    </View>
+  );
+}

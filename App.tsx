@@ -3,9 +3,11 @@ import { NavigationContainer, DefaultTheme as NavigationDefaultTheme } from '@re
 import { DefaultTheme, Provider as PaperProvider } from 'react-native-paper';
 import { ThemeProvider } from './ThemeContext';
 import AppNavigator from './AppNavigator';
-import { StatusBar, Platform } from 'react-native';
+import { StatusBar, Platform, View, Text, TouchableOpacity } from 'react-native';
 import NotificationService from './services/NotificationService';
 import { auth, database, supabase } from './supabase';
+import Constants from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Create a non-animating theme
 const noAnimationTheme = {
@@ -41,71 +43,226 @@ const navigationTheme = {
 export default function App() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [initError, setInitError] = useState<Error | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [retryCount, setRetryCount] = useState(0);
+  const [debugInfo, setDebugInfo] = useState<Record<string, any>>({});
+
+  const MAX_RETRIES = 3;
+  const INITIAL_TIMEOUT = 5000; // Reduced timeout to 5 seconds
+
+  const getSessionWithRetry = async (timeout: number, attempt: number = 1) => {
+    try {
+      // Only log retry attempts if we're retrying
+      if (attempt > 1) {
+        console.log(`[App] Retry attempt ${attempt}/${MAX_RETRIES}`);
+      }
+      
+      // Get current user with timeout
+      const userTimeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`getCurrentUser timed out after ${timeout}ms`)), timeout)
+      );
+      
+      const userPromise = auth.getCurrentUser();
+      const userResult = await Promise.race([userPromise, userTimeoutPromise]) as any;
+      
+      const { user, error: userError } = userResult;
+
+      // Only log errors, not normal "no session" state
+      if (userError && !userError.message.includes('Auth session missing')) {
+        console.error('[App] User check error:', userError);
+        throw userError;
+      }
+
+      // Get session with timeout
+      const sessionTimeoutPromise = new Promise((_, reject) => 
+        setTimeout(() => reject(new Error(`getSession timed out after ${timeout}ms`)), timeout)
+      );
+      
+      const getSessionPromise = auth.getSession();
+      const sessionResult = await Promise.race([getSessionPromise, sessionTimeoutPromise]) as any;
+      
+      const { session: currentSession, error: sessionError } = sessionResult;
+
+      // Only log errors, not normal "no session" state
+      if (sessionError && !sessionError.message.includes('Auth session missing')) {
+        console.error('[App] Session check error:', sessionError);
+        throw sessionError;
+      }
+
+      return { session: currentSession, error: null };
+    } catch (error) {
+      if (error && typeof error === 'object' && 'message' in error && 
+          !(error instanceof Error && error.message.includes('Auth session missing'))) {
+        if (attempt < MAX_RETRIES) {
+          const nextTimeout = Math.min(timeout * 1.2, 10000);
+          return getSessionWithRetry(nextTimeout, attempt + 1);
+        }
+        throw error;
+      }
+      return { session: null, error: null };
+    }
+  };
+
+  // Helper function to get network info
+  const getNetworkInfo = async () => {
+    try {
+      const response = await fetch('https://tvjrolyteabegukldhln.supabase.co/rest/v1/', {
+        method: 'HEAD',
+        headers: {
+          'apikey': Constants.expoConfig?.extra?.supabaseAnonKey || '',
+          'Authorization': `Bearer ${Constants.expoConfig?.extra?.supabaseAnonKey || ''}`
+        }
+      });
+      return {
+        status: response.status,
+        ok: response.ok,
+        statusText: response.statusText,
+        headers: Object.fromEntries(response.headers.entries())
+      };
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  };
+
+  const clearPersistedSession = async () => {
+    try {
+      console.log('[App] Clearing persisted session data');
+      await AsyncStorage.removeItem('supabase.auth.token');
+      await AsyncStorage.removeItem('supabase.auth.refreshToken');
+      await AsyncStorage.removeItem('supabase.auth.expiresAt');
+      await AsyncStorage.removeItem('supabase.auth.user');
+      console.log('[App] Persisted session data cleared');
+    } catch (error) {
+      console.error('[App] Error clearing persisted session:', error);
+    }
+  };
+
+  const initializeApp = async () => {
+    try {
+      setIsLoading(true);
+      setRetryCount(0);
+      setDebugInfo({});
+      
+      // Clear any persisted session data first
+      await clearPersistedSession();
+      
+      // Try to get session with retry logic
+      const { session, error } = await getSessionWithRetry(INITIAL_TIMEOUT);
+
+      if (error) {
+        console.error('[App] Initialization error:', error);
+        const errorObj = error as { message?: string };
+        const errorMessage = errorObj?.message || String(error);
+          
+        if (errorMessage.includes('network') || errorMessage.includes('timeout')) {
+          setIsAuthenticated(false);
+        } else {
+          throw error;
+        }
+      } else {
+        setIsAuthenticated(!!session);
+        if (!session) {
+          setInitError(null);
+        }
+      }
+
+      // Set up auth state change listener
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          const { data: { session: currentSession } } = await supabase.auth.getSession();
+          setIsAuthenticated(!!currentSession);
+        } else if (event === 'SIGNED_OUT') {
+          setIsAuthenticated(false);
+        } else {
+          setIsAuthenticated(!!session);
+        }
+      });
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    } catch (error) {
+      console.error('[App] Initialization error:', error);
+      setInitError(error as Error);
+      setRetryCount(prev => prev + 1);
+    } finally {
+      setIsInitialized(true);
+      setIsLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const initializeApp = async () => {
-      try {
-        // Get initial session
-        const { session, error } = await auth.getSession();
-        if (error) throw error;
-
-        // Set initial auth state
-        setIsAuthenticated(!!session);
-
-        // Set up auth state change listener
-        const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-          console.log('Auth state changed:', {
-            event,
-            hasSession: !!session,
-            userId: session?.user?.id,
-            accessToken: !!session?.access_token,
-            refreshToken: !!session?.refresh_token
-          });
-          
-          if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-            // Get the latest session to ensure we have the most up-to-date data
-            const { data: { session: currentSession } } = await supabase.auth.getSession();
-            console.log('Updated session after sign in:', {
-              hasSession: !!currentSession,
-              userId: currentSession?.user?.id,
-              accessToken: !!currentSession?.access_token
-            });
-            setIsAuthenticated(!!currentSession);
-          } else if (event === 'SIGNED_OUT') {
-            console.log('User signed out');
-            setIsAuthenticated(false);
-          } else if (event === 'INITIAL_SESSION') {
-            console.log('Initial session check:', {
-              hasSession: !!session,
-              userId: session?.user?.id
-            });
-            setIsAuthenticated(!!session);
-          } else {
-            // For other events, just update the auth state
-            console.log('Other auth event:', event);
-            setIsAuthenticated(!!session);
-          }
-        });
-
-        // Clean up subscription on unmount
-        return () => {
-          subscription.unsubscribe();
-        };
-      } catch (error) {
-        console.error('Error initializing app:', error);
-      } finally {
-        setIsInitialized(true);
-      }
-    };
-
+    console.log('[App] Starting app initialization');
     initializeApp();
   }, []);
 
-  if (!isInitialized) {
-    // You might want to show a loading screen here
-    return null;
+  const handleRetry = () => {
+    setInitError(null);
+    setIsLoading(true);
+    setRetryCount(0);
+    initializeApp();
+  };
+
+  console.log('[App] Render state:', {
+    isInitialized,
+    isAuthenticated,
+    hasError: !!initError,
+    errorMessage: initError?.message,
+    isLoading,
+    retryCount
+  });
+
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFFFF' }}>
+        <Text style={{ color: '#5A66C4', fontSize: 16 }}>Loading...</Text>
+        {retryCount > 0 && (
+          <Text style={{ color: '#666666', fontSize: 14, marginTop: 10 }}>
+            Retry attempt {retryCount}/{MAX_RETRIES}
+          </Text>
+        )}
+      </View>
+    );
   }
 
+  if (initError) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FFFFFF' }}>
+        <Text style={{ color: '#FF5252', fontSize: 16, textAlign: 'center', padding: 20 }}>
+          Error initializing app: {initError.message}
+        </Text>
+        <Text style={{ color: '#666666', fontSize: 14, textAlign: 'center', padding: 20 }}>
+          {retryCount >= MAX_RETRIES 
+            ? 'Unable to connect to the server. Please check your internet connection and try again.'
+            : 'Retrying connection...'}
+        </Text>
+        {retryCount >= MAX_RETRIES && (
+          <>
+            <TouchableOpacity 
+              onPress={handleRetry}
+              style={{
+                backgroundColor: '#5A66C4',
+                paddingHorizontal: 20,
+                paddingVertical: 10,
+                borderRadius: 5,
+                marginTop: 20
+              }}
+            >
+              <Text style={{ color: '#FFFFFF', fontSize: 16 }}>Retry Connection</Text>
+            </TouchableOpacity>
+            <Text style={{ color: '#666666', fontSize: 12, marginTop: 20, padding: 10 }}>
+              Debug Info: {JSON.stringify(debugInfo, null, 2)}
+            </Text>
+          </>
+        )}
+      </View>
+    );
+  }
+
+  console.log('[App] Rendering main app component');
   return (
     <PaperProvider theme={noAnimationTheme}>
       <ThemeProvider>

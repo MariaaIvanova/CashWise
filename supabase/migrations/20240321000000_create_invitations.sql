@@ -70,4 +70,41 @@ $$ LANGUAGE plpgsql;
 -- Create trigger to periodically check for expired invitations
 CREATE TRIGGER check_expired_invitations
     AFTER INSERT OR UPDATE ON invitations
-    EXECUTE FUNCTION update_expired_invitations(); 
+    EXECUTE FUNCTION update_expired_invitations();
+
+CREATE TABLE IF NOT EXISTS profiles (
+    id UUID REFERENCES auth.users(id) ON DELETE CASCADE PRIMARY KEY,
+    name TEXT,
+    avatar_url TEXT,
+    age INTEGER,
+    interests TEXT[],
+    social_links JSONB DEFAULT '{"facebook": "", "linkedin": "", "instagram": ""}'::jsonb,
+    xp INTEGER DEFAULT 0,
+    streak INTEGER DEFAULT 0,
+    completed_lessons INTEGER DEFAULT 0,
+    completed_quizzes INTEGER DEFAULT 0,
+    referral_code TEXT UNIQUE DEFAULT encode(gen_random_bytes(6), 'hex'),
+    referred_by UUID REFERENCES profiles(id),
+    monthly_invitation_count INTEGER DEFAULT 0,
+    last_invitation_reset TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Create function to reset monthly invitation count
+CREATE OR REPLACE FUNCTION reset_monthly_invitation_count()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.last_invitation_reset < date_trunc('month', CURRENT_TIMESTAMP) THEN
+        NEW.monthly_invitation_count := 0;
+        NEW.last_invitation_reset := CURRENT_TIMESTAMP;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create trigger to automatically reset monthly invitation count
+CREATE TRIGGER reset_monthly_invitations
+    BEFORE UPDATE ON profiles
+    FOR EACH ROW
+    EXECUTE FUNCTION reset_monthly_invitation_count(); 

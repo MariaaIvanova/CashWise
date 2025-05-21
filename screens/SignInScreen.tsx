@@ -4,6 +4,7 @@ import FontAwesome from 'react-native-vector-icons/FontAwesome';
 import { useTheme, THEME } from '../ThemeContext';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { auth, supabase } from '../supabase';
+import Constants from 'expo-constants';
 
 // Define the navigation param list type
 type RootStackParamList = {
@@ -83,8 +84,12 @@ export default function SignInScreen({ navigation }: SignInScreenProps) {
       setLoading(true);
       setError('');
 
-      // Get the Supabase project URL
-      const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
+      // Get the Supabase project URL from Constants
+      const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+      if (!supabaseUrl) {
+        throw new Error('Supabase URL not configured');
+      }
+
       const redirectUrl = Platform.OS === 'web' 
         ? window.location.origin  // For web testing
         : `${supabaseUrl}/auth/v1/callback`;  // For native app - using Supabase callback URL

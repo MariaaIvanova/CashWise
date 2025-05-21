@@ -1,65 +1,245 @@
 import { createClient } from '@supabase/supabase-js';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 
-// Initialize the Supabase client
-// Replace these with your actual Supabase project URL and anon key
-const supabaseUrl = 'https://tvjrolyteabegukldhln.supabase.co';
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2anJvbHl0ZWFiZWd1a2xkaGxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY3MDkyMTQsImV4cCI6MjA2MjI4NTIxNH0.rWSopj0XKxyMtL8ggzWvajg4ilQkFgQjNm6sfvtHork';
+// Debug logging
+console.log('Expo Config:', {
+  hasConfig: !!Constants.expoConfig,
+  hasExtra: !!Constants.expoConfig?.extra,
+  extraKeys: Constants.expoConfig?.extra ? Object.keys(Constants.expoConfig.extra) : [],
+  supabaseUrl: Constants.expoConfig?.extra?.supabaseUrl,
+  supabaseAnonKey: Constants.expoConfig?.extra?.supabaseAnonKey ? 'present' : 'missing'
+});
+
+// Get Supabase configuration from app config
+const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
+const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey;
+
+if (!supabaseUrl || !supabaseAnonKey) {
+  console.error('Supabase configuration error:', {
+    hasConfig: !!Constants.expoConfig,
+    hasExtra: !!Constants.expoConfig?.extra,
+    extraKeys: Constants.expoConfig?.extra ? Object.keys(Constants.expoConfig.extra) : [],
+    supabaseUrl: supabaseUrl ? 'present' : 'missing',
+    supabaseAnonKey: supabaseAnonKey ? 'present' : 'missing'
+  });
+  throw new Error('Supabase configuration is missing. Please check your app.json file.');
+}
 
 // Initialize the Supabase client with persistence
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    storage: AsyncStorage,
+    storage: Platform.OS === 'web' ? undefined : AsyncStorage,
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: true,
-    flowType: 'pkce'
+    flowType: 'pkce',
+    debug: false
+  },
+  global: {
+    headers: {
+      'x-application-name': 'FinanceApp'
+    }
+  },
+  db: {
+    schema: 'public'
+  },
+  realtime: {
+    params: {
+      eventsPerSecond: 10
+    }
   }
 });
+
+// Reduce auth state change logging
+supabase.auth.onAuthStateChange((event, session) => {
+  // Only log significant auth events
+  if (event === 'SIGNED_IN' || event === 'SIGNED_OUT') {
+    console.log('[Auth]', event, session?.user?.id ? `User: ${session.user.id}` : 'No user');
+  }
+});
+
+// Remove storage state check logging
+const checkStorageState = async () => {
+  if (Platform.OS === 'web') {
+    try {
+      localStorage.getItem('sb-tvjrolyteabegukldhln-auth-token');
+    } catch (error) {
+      console.error('[Auth] Error checking web storage:', error);
+    }
+  } else {
+    try {
+      await AsyncStorage.getItem('supabase.auth.token');
+    } catch (error) {
+      console.error('[Auth] Error checking native storage:', error);
+    }
+  }
+};
+
+// Check storage state on initialization
+checkStorageState();
 
 // Helper functions for common database operations
 export const auth = {
   signUp: async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
-    return { data, error };
+    try {
+      console.log('[Supabase] Attempting sign up for:', email);
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+      });
+      if (error) throw error;
+      console.log('[Supabase] Sign up successful:', { userId: data.user?.id });
+      return { data, error: null };
+    } catch (error) {
+      console.error('[Supabase] Sign up error:', error);
+      return { data: null, error };
+    }
   },
 
   signIn: async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    return { data, error };
+    try {
+      console.log('[Supabase] Attempting sign in for:', email);
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (error) throw error;
+      console.log('[Supabase] Sign in successful:', { userId: data.user?.id });
+      return { data, error: null };
+    } catch (error) {
+      console.error('[Supabase] Sign in error:', error);
+      return { data: null, error };
+    }
   },
 
   signOut: async () => {
-    const { error } = await supabase.auth.signOut();
-    return { error };
+    try {
+      console.log('[Supabase] Attempting sign out');
+      const { error } = await supabase.auth.signOut();
+      if (error) throw error;
+      console.log('[Supabase] Sign out successful');
+      return { error: null };
+    } catch (error) {
+      console.error('[Supabase] Sign out error:', error);
+      return { error };
+    }
   },
 
   getCurrentUser: async () => {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    return { user, error };
+    try {
+      const { data: { user }, error } = await supabase.auth.getUser();
+      
+      // Don't treat missing session as an error
+      if (error?.message?.includes('Auth session missing')) {
+        return { user: null, error: null };
+      }
+      
+      if (error) throw error;
+      return { user, error: null };
+    } catch (error) {
+      // Only log actual errors, not missing session
+      if (!(error instanceof Error && error.message?.includes('Auth session missing'))) {
+        console.error('[Auth] Get current user error:', error);
+      }
+      return { user: null, error };
+    }
   },
 
-  // Add new session management functions
   onAuthStateChange: (callback: (event: 'SIGNED_IN' | 'SIGNED_OUT' | 'USER_UPDATED' | 'PASSWORD_RECOVERY' | 'INITIAL_SESSION', session: any) => void) => {
+    console.log('[Supabase] Setting up auth state change listener');
     return supabase.auth.onAuthStateChange((event, session) => {
+      console.log('[Supabase] Auth state changed:', {
+        event,
+        hasSession: !!session,
+        userId: session?.user?.id
+      });
       callback(event as 'SIGNED_IN' | 'SIGNED_OUT' | 'USER_UPDATED' | 'PASSWORD_RECOVERY' | 'INITIAL_SESSION', session);
     });
   },
 
   getSession: async () => {
-    const { data: { session }, error } = await supabase.auth.getSession();
-    return { session, error };
+    try {
+      console.log('[Supabase] Getting session');
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      console.log('[Supabase] Got session:', {
+        hasSession: !!session,
+        userId: session?.user?.id,
+        accessToken: !!session?.access_token,
+        refreshToken: !!session?.refresh_token
+      });
+      return { session, error: null };
+    } catch (error) {
+      console.error('[Supabase] Get session error:', error);
+      return { session: null, error };
+    }
   },
 
   refreshSession: async () => {
-    const { data: { session }, error } = await supabase.auth.refreshSession();
-    return { session, error };
+    try {
+      console.log('[Supabase] Refreshing session');
+      const { data: { session }, error } = await supabase.auth.refreshSession();
+      if (error) throw error;
+      console.log('[Supabase] Session refreshed:', {
+        hasSession: !!session,
+        userId: session?.user?.id,
+        accessToken: !!session?.access_token
+      });
+      return { session, error: null };
+    } catch (error) {
+      console.error('[Supabase] Refresh session error:', error);
+      return { session: null, error };
+    }
+  },
+
+  clearAllSessions: async () => {
+    try {
+      console.log('[Supabase] Attempting to clear all sessions');
+      
+      // First sign out from Supabase
+      const { error: signOutError } = await supabase.auth.signOut();
+      if (signOutError) {
+        console.error('[Supabase] Error during sign out:', signOutError);
+        throw signOutError;
+      }
+
+      // Clear web storage if in web environment
+      if (Platform.OS === 'web') {
+        try {
+          // Clear all Supabase related items from localStorage
+          const keys = Object.keys(localStorage);
+          keys.forEach(key => {
+            if (key.startsWith('sb-') || key.includes('supabase')) {
+              localStorage.removeItem(key);
+            }
+          });
+          console.log('[Supabase] Cleared web storage session data');
+        } catch (error) {
+          console.error('[Supabase] Error clearing web storage:', error);
+        }
+      } else {
+        // Clear native storage
+        try {
+          const keys = await AsyncStorage.getAllKeys();
+          const supabaseKeys = keys.filter(key => 
+            key.startsWith('supabase.') || 
+            key.includes('supabase')
+          );
+          await AsyncStorage.multiRemove(supabaseKeys);
+          console.log('[Supabase] Cleared native storage session data');
+        } catch (error) {
+          console.error('[Supabase] Error clearing native storage:', error);
+        }
+      }
+
+      console.log('[Supabase] All sessions cleared successfully');
+      return { error: null };
+    } catch (error) {
+      console.error('[Supabase] Error clearing all sessions:', error);
+      return { error };
+    }
   },
 };
 
@@ -229,304 +409,46 @@ const formatLocalDate = (date: Date = new Date()): string => {
 // Database helper functions for your existing tables
 export const database = {
   // Profile operations
-  createProfile: async (profile: ProfileCreate) => {
-    console.log('Attempting to create/update profile with data:', profile);
-    try {
-      // Validate social links
-      const social_links = validateSocialLinks(profile.social_links || {});
-
-      // Use upsert instead of insert to handle both new and existing profiles
-      const { data, error } = await supabase
-        .from('profiles')
-        .upsert({
-          id: profile.id,
-          name: profile.name,
-          avatar_url: profile.avatar_url || null,
-          age: profile.age || null,
-          interests: profile.interests || [],
-          xp: profile.xp || 0,
-          streak: profile.streak || 0,
-          completed_lessons: profile.completed_lessons || 0,
-          completed_quizzes: profile.completed_quizzes || 0,
-          social_links,
-          created_at: profile.created_at || new Date().toISOString(),
-          updated_at: profile.updated_at || new Date().toISOString()
-        }, {
-          onConflict: 'id',
-          ignoreDuplicates: false
-        })
-        .select();
-
-      console.log('Profile creation/update result:', { data, error });
-
-      if (error) {
-        console.error('Profile creation/update error details:', {
-          message: error.message,
-          details: error.details,
-          hint: error.hint,
-          code: error.code
-        });
-        throw error;
-      }
-
-      return { data, error: null };
-    } catch (err) {
-      console.error('Profile creation/update error:', err);
-      return { data: null, error: err };
-    }
-  },
-
   getProfile: async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select(`
-          id,
-          name,
-          avatar_url,
-          age,
-          interests,
-          xp,
-          streak,
-          completed_lessons,
-          completed_quizzes,
-          social_links,
-          created_at,
-          updated_at
-        `)
-        .eq('id', userId)
-        .single();
-
-      if (error) {
-        // If the profile doesn't exist, create a default one
-        if (error.code === 'PGRST116') {
-          console.log('Profile not found, creating default profile...');
-          const { data: newProfile, error: createError } = await database.createProfile({
-            id: userId,
-            name: '', // Empty name as we don't have it
-            avatar_url: null,
-            age: null,
-            interests: [],
-            xp: 0,
-            streak: 0,
-            completed_lessons: 0,
-            completed_quizzes: 0,
-            social_links: { facebook: '', linkedin: '', instagram: '' },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
-
-          if (createError) {
-            console.error('Error creating default profile:', createError);
-            throw createError;
-          }
-
-          return { data: newProfile, error: null };
-        }
-        throw error;
-      }
-
-      return { data, error: null };
-    } catch (err) {
-      console.error('Error in getProfile:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  updateProfile: async (userId: string, updates: ProfileUpdate) => {
-    try {
-      // First check if profile exists
-      const { data: existingProfile, error: getError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', userId)
-        .single();
-
-      // If profile doesn't exist, create it first
-      if (getError?.code === 'PGRST116') {
-        console.log('Profile not found, creating default profile...');
-        const { error: createError } = await database.createProfile({
-          id: userId,
-          name: '', // Empty name as we don't have it
-          avatar_url: null,
-          age: null,
-          interests: [],
-          xp: 0,
-          streak: 0,
-          completed_lessons: 0,
-          completed_quizzes: 0,
-          social_links: { facebook: '', linkedin: '', instagram: '' },
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        });
-
-        if (createError) {
-          console.error('Error creating default profile:', createError);
-          throw createError;
-        }
-      } else if (getError) {
-        throw getError;
-      }
-
-      // If updating social links, validate them
-      if (updates.socialLinks) {
-        updates.social_links = validateSocialLinks(updates.socialLinks);
-        delete updates.socialLinks; // Remove the camelCase version
-      }
-
-      // If updating XP, add it to the current value
-      if (updates.xp) {
-        const { data: currentProfile } = await database.getProfile(userId);
-        if (currentProfile && 'xp' in currentProfile) {
-          updates.xp = (currentProfile.xp || 0) + updates.xp;
-        }
-      }
-
-      // If updating streak, get the actual streak from learning activity
-      if (updates.streak !== undefined) {
-        const { data: streakInfo } = await database.getStreakInfo(userId);
-        if (streakInfo) {
-          updates.streak = streakInfo.currentStreak;
-        }
-      }
-
-      // Now update the profile
-      const { data, error } = await supabase
-        .from('profiles')
-        .update({
-          ...updates,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', userId)
-        .select();
-
-      if (error) throw error;
-
-      // Check for achievements after profile update
-      await database.checkAchievements(userId);
-
-      return { data: data?.[0] || null, error: null };
-    } catch (err) {
-      console.error('Error in updateProfile:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  // Achievement operations
-  getAchievements: async () => {
-    try {
-      const { data, error } = await supabase
-        .from('achievements')
-        .select('*')
-        .order('id', { ascending: true });
-      return { data, error };
-    } catch (err) {
-      console.error('Error in getAchievements:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  getUserAchievements: async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('user_achievements')
-        .select(`
-          *,
-          achievement:achievements(*)
-        `)
-        .eq('user_id', userId);
-
-      if (error) throw error;
-
-      // Transform the data to match the Achievement interface
-      const achievements = data.map((ua: any) => ({
-        id: ua.achievement.id,
-        title: ua.achievement.title,
-        description: ua.achievement.description,
-        icon: ua.achievement.icon,
-        completed: true,
-        completed_at: ua.completed_at
-      }));
-
-      return { data: achievements, error: null };
-    } catch (err) {
-      console.error('Error in getUserAchievements:', err);
-      return { data: [], error: err };
-    }
-  },
-
-  unlockAchievement: async (userId: string, achievementId: number) => {
-    try {
-      // Check if achievement is already unlocked
-      const { data: existing } = await supabase
-        .from('user_achievements')
-        .select('id')
-        .eq('user_id', userId)
-        .eq('achievement_id', achievementId)
-        .single();
-
-      if (existing) return { data: existing, error: null };
-
-      // Get achievement details
-      const { data: achievement } = await supabase
-        .from('achievements')
-        .select('*')
-        .eq('id', achievementId)
-        .single();
-
-      if (!achievement) throw new Error('Achievement not found');
-
-      // Insert user achievement
-      const { data, error } = await supabase
-        .from('user_achievements')
-        .insert([{
-          user_id: userId,
-          achievement_id: achievementId,
-          completed_at: new Date().toISOString()
-        }])
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Update user XP
-      await database.updateProfile(userId, {
-        xp: achievement.xp_reward
-      });
-
-      return { data, error: null };
-    } catch (err) {
-      console.error('Error in unlockAchievement:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  // Leaderboard operations
-  getLeaderboard: async () => {
     const { data, error } = await supabase
-      .from('leaderboard')
+      .from('profiles')
       .select('*')
-      .order('score', { ascending: false });
+      .eq('id', userId)
+      .single();
     return { data, error };
   },
 
-  // Quiz operations
-  getQuizAttempts: async (userId: string) => {
+  updateProfile: async (userId: string, updates: any) => {
     const { data, error } = await supabase
-      .from('quiz_attempts')
-      .select('*')
-      .eq('profile_id', userId)
-      .order('created_at', { ascending: false });
+      .from('profiles')
+      .update(updates)
+      .eq('id', userId);
     return { data, error };
   },
 
-  saveQuizAttempt: async (attempt: Omit<QuizAttempt, 'id' | 'created_at' | 'completed_at'>) => {
+  // Learning activity operations
+  addLearningActivity: async (activity: {
+    user_id: string;
+    activity_type: string;
+    lesson_id?: string;
+    quiz_id?: string;
+    xp_earned: number;
+  }) => {
     const { data, error } = await supabase
-      .from('quiz_attempts')
+      .from('learning_activities')
       .insert([{
-        ...attempt,
-        completed_at: new Date().toISOString()
+        ...activity,
+        created_at: new Date().toISOString()
       }]);
+    return { data, error };
+  },
+
+  getLearningActivities: async (userId: string) => {
+    const { data, error } = await supabase
+      .from('learning_activities')
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false });
     return { data, error };
   },
 
@@ -593,260 +515,55 @@ export const database = {
     return { data, error };
   },
 
-  // Learning activity operations
-  getLearningActivity: async (userId: string, startDate?: string, endDate?: string) => {
-    try {
-      let query = supabase
-        .from('learning_activity')
-        .select('*')
-        .eq('user_id', userId)
-        .order('activity_date', { ascending: false });
+  getQuizAttempts: async (userId: string) => {
+    const { data, error } = await supabase
+      .from('quiz_attempts')
+      .select('*')
+      .eq('profile_id', userId)
+      .order('created_at', { ascending: false });
 
-      if (startDate) {
-        query = query.gte('activity_date', startDate);
-      }
-      if (endDate) {
-        query = query.lte('activity_date', endDate);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return { data: data as LearningActivity[], error: null };
-    } catch (err) {
-      console.error('Error fetching learning activity:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  addLearningActivity: async (activity: LearningActivityCreate) => {
-    try {
-      // Use local date for activity_date
-      const activityDate = activity.activity_date || formatLocalDate();
-      
-      const { data, error } = await supabase
-        .from('learning_activity')
-        .insert([{
-          user_id: activity.user_id,
-          activity_date: activityDate,
-          activity_type: activity.activity_type,
-          lesson_id: activity.lesson_id,
-          quiz_id: activity.quiz_id,
-          xp_earned: activity.xp_earned || 0
-        }])
-        .select();
-
-      if (error) throw error;
-      return { data: data[0] as LearningActivity, error: null };
-    } catch (err) {
-      console.error('Error adding learning activity:', err);
-      return { data: null, error: err };
-    }
+    return { data, error };
   },
 
   getStreakInfo: async (userId: string) => {
-    try {
-      console.log('=== Streak Calculation Debug ===');
-      console.log('User ID:', userId);
-      console.log('Current time:', new Date().toLocaleString());
+    // Get the user's profile to check their streak
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('streak')
+      .eq('id', userId)
+      .single();
 
-      // Call the database function to calculate streaks
-      const { data, error } = await supabase
-        .rpc('calculate_user_streaks', {
-          p_user_id: userId
-        });
-
-      if (error) {
-        console.error('Error calculating streaks:', error);
-        throw error;
-      }
-
-      // The function returns an array, we need the first element
-      const streakData = data[0];
-      console.log('Streak calculation result:', streakData);
-
-      // Transform the activity dates into the marked dates format
-      const markedDates = Object.fromEntries(
-        (streakData.activity_dates || []).map((date: string) => [
-          date,
-          {
-            marked: true,
-            dotColor: '#5A66C4',
-            customContainerStyle: {
-              borderRadius: 20,
-            },
-            customTextStyle: {
-              color: '#000000',
-            }
-          }
-        ])
-      );
-
-      return {
-        data: {
-          currentStreak: streakData.current_streak,
-          longestStreak: streakData.longest_streak,
-          totalDays: streakData.total_days,
-          markedDates
-        },
-        error: null
-      };
-    } catch (err) {
-      console.error('Error calculating streak info:', err);
-      return { data: null, error: err };
+    if (profileError) {
+      return { data: null, error: profileError };
     }
+
+    return { 
+      data: { 
+        currentStreak: profile?.streak || 0 
+      }, 
+      error: null 
+    };
   },
 
-  createInvitation: async (inviterId: string, invitation: InvitationCreate) => {
-    try {
-      const expirationDate = new Date();
-      expirationDate.setDate(expirationDate.getDate() + 7); // Invitation expires in 7 days
-
-      const { data, error } = await supabase
-        .from('invitations')
-        .insert([{
-          inviter_id: inviterId,
-          invitee_email: invitation.invitee_email,
-          status: 'pending',
-          invitation_code: await database.generateInvitationCode(),
-          expires_at: expirationDate.toISOString()
-        }])
-        .select();
-
-      if (error) throw error;
-      return { data: data[0] as Invitation, error: null };
-    } catch (err) {
-      console.error('Error creating invitation:', err);
-      return { data: null, error: err };
-    }
+  // Achievement operations
+  getAchievements: async () => {
+    const { data, error } = await supabase
+      .from('achievements')
+      .select('*')
+      .order('id', { ascending: true });
+    return { data, error };
   },
 
-  generateInvitationCode: async () => {
-    try {
-      const { data, error } = await supabase
-        .rpc('generate_invitation_code');
-
-      if (error) throw error;
-      return data as string;
-    } catch (err) {
-      console.error('Error generating invitation code:', err);
-      throw err;
-    }
-  },
-
-  getInvitationByCode: async (code: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('invitations')
-        .select('*')
-        .eq('invitation_code', code)
-        .single();
-
-      if (error) throw error;
-      return { data: data as Invitation, error: null };
-    } catch (err) {
-      console.error('Error getting invitation:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  acceptInvitation: async (invitationCode: string, userId: string) => {
-    try {
-      // Find the inviter by their referral code
-      const { data: inviter, error: inviterError } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('referral_code', invitationCode)
-        .single();
-
-      if (inviterError || !inviter) {
-        throw new Error('Invalid or expired invitation code');
-      }
-
-      // Update the new user's profile to record who referred them
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({ referred_by: inviter.id })
-        .eq('id', userId);
-
-      if (updateError) throw updateError;
-
-      // Award XP to both users
-      await database.updateProfile(inviter.id, { xp: 300 }); // Award XP to referrer
-      await database.updateProfile(userId, { xp: 100 }); // Award XP to new user
-
-      // Unlock the referral achievement for the inviter
-      await database.unlockAchievement(inviter.id, 7); // Achievement ID 7 is the referral achievement
-
-      return { data: { inviter_id: inviter.id }, error: null };
-    } catch (err) {
-      console.error('Error accepting invitation:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  getUserInvitations: async (userId: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('invitations')
-        .select('*')
-        .eq('inviter_id', userId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      return { data: data as Invitation[], error: null };
-    } catch (err) {
-      console.error('Error getting user invitations:', err);
-      return { data: null, error: err };
-    }
-  },
-
-  checkAchievements: async (userId: string) => {
-    try {
-      const { data: profile } = await database.getProfile(userId);
-      if (!profile || !('xp' in profile)) return;
-
-      // Get all achievements
-      const { data: achievements } = await database.getAchievements();
-      if (!achievements) return;
-
-      // Get user's current achievements
-      const { data: userAchievements } = await database.getUserAchievements(userId);
-      const unlockedIds = userAchievements.map(ua => ua.id);
-
-      // Check each achievement condition
-      for (const achievement of achievements) {
-        if (unlockedIds.includes(achievement.id)) continue;
-
-        let shouldUnlock = false;
-
-        switch (achievement.id) {
-          case 1: // First lesson
-            shouldUnlock = profile.completed_lessons > 0;
-            break;
-          case 2: // 7-day streak
-            shouldUnlock = profile.streak >= 7;
-            break;
-          case 3: // 10 lessons
-            shouldUnlock = profile.completed_lessons >= 10;
-            break;
-          case 4: // 5 perfect quizzes
-            shouldUnlock = profile.completed_quizzes >= 5;
-            break;
-          case 5: // Social links
-            shouldUnlock = Object.values(profile.social_links).some(link => link !== '');
-            break;
-          case 6: // Level 5
-            shouldUnlock = Math.floor(profile.xp / 1000) >= 5;
-            break;
-        }
-
-        if (shouldUnlock) {
-          await database.unlockAchievement(userId, achievement.id);
-        }
-      }
-    } catch (err) {
-      console.error('Error in checkAchievements:', err);
-    }
+  getUserAchievements: async (userId: string) => {
+    const { data, error } = await supabase
+      .from('user_achievements')
+      .select(`
+        *,
+        achievement:achievements(*)
+      `)
+      .eq('user_id', userId)
+      .order('completed_at', { ascending: false });
+    return { data, error };
   },
 };
 

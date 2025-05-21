@@ -8,14 +8,16 @@ import {
   Dimensions,
   Animated,
   Platform,
-  SafeAreaView,
   StatusBar,
   Alert,
+  Share,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme, ProgressBar, Button } from 'react-native-paper';
 import { Ionicons } from '@expo/vector-icons';
 import { THEME } from '../ThemeContext';
 import LottieView from 'lottie-react-native';
+import { supabase } from '../supabase';
 
 const { width, height } = Dimensions.get('window');
 
@@ -167,29 +169,85 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
   const [result, setResult] = useState<TestResult | null>(null);
   const [fadeAnim] = useState(new Animated.Value(1));
   const [slideAnim] = useState(new Animated.Value(0));
+  const [hasAttempted, setHasAttempted] = useState(false);
+  const [previousResult, setPreviousResult] = useState<TestResult | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isTransitioning, setIsTransitioning] = useState(false);
+  const [nextQuestionIndex, setNextQuestionIndex] = useState<number | null>(null);
   const animationRef = useRef<LottieView>(null);
 
   useEffect(() => {
-    Animated.parallel([
-      Animated.timing(progress, {
-        toValue: (currentQuestion + 1) / questions.length,
-        duration: 300,
-        useNativeDriver: false,
-      }),
+    checkPreviousAttempt();
+  }, []);
+
+  const checkPreviousAttempt = async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Грешка', 'Моля, влезте в профила си, за да проверим дали вече сте направили теста');
+        onClose();
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('personality_type')
+        .eq('profile_id', user.id)
+        .eq('quiz_id', 'financial_personality')
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
+        throw error;
+      }
+
+      if (data) {
+        setHasAttempted(true);
+        const previousType = data.personality_type as 'impulsive' | 'balanced' | 'strategic';
+        setPreviousResult(results[previousType]);
+        setResult(results[previousType]);
+        setShowResult(true);
+      }
+    } catch (error) {
+      console.error('Error checking previous attempt:', error);
+      Alert.alert('Грешка', 'Възникна проблем при проверка на предишни опити');
+      onClose();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (isTransitioning && nextQuestionIndex !== null) {
+      // First fade out
       Animated.timing(fadeAnim, {
         toValue: 0,
         duration: 150,
         useNativeDriver: true,
-      }),
-    ]).start(() => {
-      fadeAnim.setValue(1);
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-    });
-  }, [currentQuestion]);
+      }).start(() => {
+        // Update the question index
+        setCurrentQuestion(nextQuestionIndex);
+        setNextQuestionIndex(null);
+        
+        // Then fade back in
+        requestAnimationFrame(() => {
+          Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: 150,
+            useNativeDriver: true,
+          }).start(() => {
+            setIsTransitioning(false);
+          });
+        });
+
+        // Update progress bar
+        Animated.timing(progress, {
+          toValue: (nextQuestionIndex + 1) / questions.length,
+          duration: 300,
+          useNativeDriver: false,
+        }).start();
+      });
+    }
+  }, [isTransitioning, nextQuestionIndex]);
 
   useEffect(() => {
     if (showResult) {
@@ -204,16 +262,32 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
   }, [showResult]);
 
   const handleAnswer = (answer: 'A' | 'B' | 'C') => {
+    if (isTransitioning) return;
+    
     setAnswers(prev => ({ ...prev, [currentQuestion]: answer }));
+    setIsTransitioning(true);
     
     if (currentQuestion < questions.length - 1) {
-      setCurrentQuestion(prev => prev + 1);
+      setNextQuestionIndex(currentQuestion + 1);
     } else {
-      calculateResult();
+      // For the final question, calculate result after animation
+      setNextQuestionIndex(currentQuestion);
+      setTimeout(() => {
+        calculateResult();
+      }, 300);
     }
   };
 
-  const calculateResult = () => {
+  const handlePreviousQuestion = () => {
+    if (isTransitioning || currentQuestion === 0) return;
+    
+    setIsTransitioning(true);
+    setNextQuestionIndex(currentQuestion - 1);
+  };
+
+  const calculateResult = async () => {
+    if (hasAttempted) return;
+
     const counts = { A: 0, B: 0, C: 0 };
     Object.values(answers).forEach(answer => {
       counts[answer]++;
@@ -231,34 +305,74 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
     const finalResult = results[type];
     setResult(finalResult);
     setShowResult(true);
-    onComplete(finalResult);
+
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        Alert.alert('Грешка', 'Моля, влезте в профила си, за да запазите резултата');
+        return;
+      }
+
+      const { error } = await supabase
+        .from('quiz_attempts')
+        .insert({
+          profile_id: user.id,
+          quiz_id: 'financial_personality',
+          score: 0,
+          total_questions: questions.length,
+          time_taken: 0,
+          personality_type: type,
+          completed_at: new Date().toISOString(),
+        });
+
+      if (error) throw error;
+      setHasAttempted(true);
+    } catch (error) {
+      console.error('Error saving test result:', error);
+      Alert.alert('Грешка', 'Възникна проблем при запазване на резултата');
+    }
+  };
+
+  const handleResultClose = () => {
+    if (result) {
+      onComplete(result);
+    }
+    onClose();
+  };
+
+  const handleShare = async () => {
+    if (!result) return;
+
+    try {
+      const shareMessage = `Моят финансов тип е "${result.title}"!\n\n${result.description}\n\nСъвети за подобрение:\n${result.tips.map((tip, index) => `${index + 1}. ${tip}`).join('\n')}\n\nОткрий своя финансов тип с CashWise! 💰✨`;
+      
+      await Share.share({
+        message: shareMessage,
+        title: 'Моят финансов тип - CashWise',
+      });
+    } catch (error) {
+      console.error('Error sharing result:', error);
+      Alert.alert(
+        'Грешка',
+        'Възникна проблем при споделяне на резултата. Моля, опитайте отново.'
+      );
+    }
   };
 
   const renderHeader = () => (
-    <Animated.View 
-      style={[
-        styles.header,
-        {
-          opacity: fadeAnim,
-          transform: [{
-            translateY: fadeAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: [-20, 0],
-            }),
-          }],
-        },
-      ]}
-    >
+    <View style={styles.header}>
       <View style={styles.headerContent}>
-        {currentQuestion > 0 && (
-          <TouchableOpacity 
-            onPress={() => setCurrentQuestion(prev => prev - 1)}
-            style={styles.navButton}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="chevron-back" size={24} color="#666" />
-          </TouchableOpacity>
-        )}
+        <View style={styles.headerLeft}>
+          {currentQuestion > 0 && !isTransitioning && (
+            <TouchableOpacity 
+              onPress={handlePreviousQuestion}
+              style={styles.navButton}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            >
+              <Ionicons name="arrow-back" size={24} color="#333" />
+            </TouchableOpacity>
+          )}
+        </View>
         <View style={styles.progressContainer}>
           <ProgressBar
             progress={progress as unknown as number}
@@ -269,28 +383,39 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
             {currentQuestion + 1}/{questions.length}
           </Text>
         </View>
-        <TouchableOpacity 
-          onPress={onClose}
-          style={styles.navButton}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="close" size={24} color="#666" />
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          <TouchableOpacity 
+            onPress={onClose}
+            style={styles.navButton}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            disabled={isTransitioning}
+          >
+            <Ionicons name="close" size={24} color="#333" />
+          </TouchableOpacity>
+        </View>
       </View>
-    </Animated.View>
+    </View>
   );
 
   const renderQuestion = () => {
     const question = questions[currentQuestion];
     return (
-      <Animated.View 
-        style={[
-          styles.questionContainer,
-          { opacity: fadeAnim }
-        ]}
-      >
+      <View style={styles.questionContainer}>
         {renderHeader()}
-        <View style={styles.questionContent}>
+        <Animated.View 
+          style={[
+            styles.questionContent,
+            {
+              opacity: fadeAnim,
+              transform: [{
+                translateX: fadeAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [20, 0],
+                }),
+              }],
+            },
+          ]}
+        >
           <View style={styles.questionNumberContainer}>
             <Text style={styles.questionNumber}>Въпрос {currentQuestion + 1}</Text>
           </View>
@@ -305,6 +430,7 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
                 ]}
                 onPress={() => handleAnswer(key as 'A' | 'B' | 'C')}
                 activeOpacity={0.7}
+                disabled={isTransitioning}
               >
                 <View style={styles.optionContent}>
                   <View style={[
@@ -333,8 +459,8 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
               </TouchableOpacity>
             ))}
           </View>
-        </View>
-      </Animated.View>
+        </Animated.View>
+      </View>
     );
   };
 
@@ -363,7 +489,7 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
         >
           <View style={[styles.resultHeader, { backgroundColor: result.color }]}>
             <TouchableOpacity 
-              onPress={onClose}
+              onPress={handleResultClose}
               style={styles.resultCloseButton}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
@@ -420,13 +546,19 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
             <View style={styles.resultActions}>
               <TouchableOpacity
                 style={[styles.actionButton, styles.shareButton, { backgroundColor: result.color }]}
-                onPress={() => {
-                  Alert.alert('Сподели', 'Сподели резултата си с приятели!');
-                }}
+                onPress={handleShare}
               >
                 <Ionicons name="share-social" size={20} color="#fff" />
                 <Text style={[styles.actionButtonText, { color: '#fff' }]}>
                   Сподели резултата
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionButton, { backgroundColor: result.color }]}
+                onPress={handleResultClose}
+              >
+                <Text style={[styles.actionButtonText, { color: '#fff' }]}>
+                  Завърши
                 </Text>
               </TouchableOpacity>
             </View>
@@ -443,10 +575,32 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
     );
   };
 
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Зареждане...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (hasAttempted && previousResult) {
+    return (
+      <SafeAreaView style={styles.container} edges={['top']}>
+        <View style={styles.mainContainer}>
+          {renderResult()}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      {!showResult ? renderQuestion() : renderResult()}
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <StatusBar barStyle="dark-content" backgroundColor="#fff" />
+      <View style={styles.mainContainer}>
+        {!showResult ? renderQuestion() : renderResult()}
+      </View>
     </SafeAreaView>
   );
 };
@@ -456,34 +610,46 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  mainContainer: {
+    flex: 1,
+    position: 'relative',
+    backgroundColor: '#fff',
+  },
   header: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     zIndex: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.98)',
-    paddingTop: Platform.OS === 'ios' ? 0 : StatusBar.currentHeight,
-    paddingBottom: 12,
+    backgroundColor: '#fff',
+    paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0, 0, 0, 0.05)',
+    borderBottomColor: 'rgba(0, 0, 0, 0.1)',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 3,
   },
   headerContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 16,
-    marginTop: Platform.OS === 'ios' ? 0 : StatusBar.currentHeight,
+    height: 44,
+  },
+  headerLeft: {
+    width: 36,
+    alignItems: 'flex-start',
+  },
+  headerRight: {
+    width: 36,
+    alignItems: 'flex-end',
   },
   navButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#f5f5f5',
     justifyContent: 'center',
     alignItems: 'center',
@@ -492,7 +658,7 @@ const styles = StyleSheet.create({
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    marginHorizontal: 12,
+    marginHorizontal: 16,
   },
   progressBar: {
     flex: 1,
@@ -510,11 +676,13 @@ const styles = StyleSheet.create({
   },
   questionContainer: {
     flex: 1,
+    backgroundColor: '#fff',
   },
   questionContent: {
     flex: 1,
     padding: 20,
-    paddingTop: Platform.OS === 'ios' ? 90 : (StatusBar.currentHeight || 0) + 90,
+    paddingTop: 80,
+    backgroundColor: '#fff',
   },
   questionNumberContainer: {
     marginBottom: 16,
@@ -555,7 +723,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
-    paddingRight: 48, // Space for checkmark
+    paddingRight: 48,
   },
   optionCircle: {
     width: 40,
@@ -769,5 +937,15 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#666',
     lineHeight: 20,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
+  loadingText: {
+    fontSize: 16,
+    color: '#666',
   },
 }); 

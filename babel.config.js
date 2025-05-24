@@ -5,6 +5,16 @@ module.exports = function(api) {
     plugins: [
       '@babel/plugin-transform-export-namespace-from',
       'react-native-reanimated/plugin',
+      ['module-resolver', {
+        alias: {
+          '@': './'
+        }
+      }]
     ],
+    env: {
+      production: {
+        plugins: ['react-native-paper/babel']
+      }
+    }
   };
 }; 

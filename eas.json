@@ -8,17 +8,39 @@
       "developmentClient": true,
       "distribution": "internal",
       "android": {
-        "gradleCommand": ":app:assembleDebug"
+        "gradleCommand": ":app:assembleDebug",
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_EMAILJS_SERVICE_ID": "service_uj9gkfn",
+        "EXPO_PUBLIC_EMAILJS_TEMPLATE_ID": "template_e1wz8li",
+        "EXPO_PUBLIC_EMAILJS_PUBLIC_KEY": "5OXOW5LU9LdANi6VX",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tvjrolyteabegukldhln.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2anJvbHl0ZWFiZWd1a2xkaGxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc5NzQyNDksImV4cCI6MjA2MzU1MDI0OX0.3ChoUYbvY1LqWHhbdRc7QYPE6GYRh29mm-SSYAB6QnE"
       }
     },
     "preview": {
       "distribution": "internal",
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_EMAILJS_SERVICE_ID": "service_uj9gkfn",
+        "EXPO_PUBLIC_EMAILJS_TEMPLATE_ID": "template_e1wz8li",
+        "EXPO_PUBLIC_EMAILJS_PUBLIC_KEY": "5OXOW5LU9LdANi6VX",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tvjrolyteabegukldhln.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2anJvbHl0ZWFiZWd1a2xkaGxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc5NzQyNDksImV4cCI6MjA2MzU1MDI0OX0.3ChoUYbvY1LqWHhbdRc7QYPE6GYRh29mm-SSYAB6QnE"
       }
     },
     "production": {
-      "autoIncrement": true
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_EMAILJS_SERVICE_ID": "service_uj9gkfn",
+        "EXPO_PUBLIC_EMAILJS_TEMPLATE_ID": "template_e1wz8li",
+        "EXPO_PUBLIC_EMAILJS_PUBLIC_KEY": "5OXOW5LU9LdANi6VX",
+        "EXPO_PUBLIC_SUPABASE_URL": "https://tvjrolyteabegukldhln.supabase.co",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2anJvbHl0ZWFiZWd1a2xkaGxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc5NzQyNDksImV4cCI6MjA2MzU1MDI0OX0.3ChoUYbvY1LqWHhbdRc7QYPE6GYRh29mm-SSYAB6QnE"
+      }
     }
   },
   "submit": {

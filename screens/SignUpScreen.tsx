@@ -90,110 +90,40 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
       setLoading(true);
       setError('');
 
-      console.log('Starting signup process...');
-      console.log('Attempting to sign up with email:', email);
-      
-      // First, try to sign up without any additional data
+      // Sign up with Supabase
       const { data: { user }, error: signUpError } = await supabase.auth.signUp({
         email,
         password
       });
 
-      console.log('Sign up result:', {
-        success: !!user,
-        userId: user?.id,
-        error: signUpError ? {
-          message: signUpError.message,
-          status: signUpError.status,
-          name: signUpError.name
-        } : null
-      });
-
       if (signUpError) {
-        console.error('Signup error details:', {
-          message: signUpError.message,
-          status: signUpError.status,
-          name: signUpError.name
-        });
         throw signUpError;
       }
-
       if (!user) {
-        console.error('No user data received after signup');
         throw new Error('No user data received');
       }
 
       // Create initial profile record
-      console.log('Creating profile record for user:', user.id);
-      try {
-        // Create profile directly without checking or selecting
-        const { error: insertError } = await supabase
-          .from('profiles')
-          .insert({
-            id: user.id,
-            name: name,
-            xp: 0,
-            streak: 0,
-            completed_lessons: 0,
-            completed_quizzes: 0,
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
-
-        if (insertError) {
-          // If the error is about duplicate key, the profile already exists
-          if (insertError.code === '23505') {
-            console.log('Profile already exists, updating...');
-            const { error: updateError } = await supabase
-              .from('profiles')
-              .update({ name })
-              .eq('id', user.id);
-
-            if (updateError) {
-              console.error('Error updating profile:', updateError);
-              throw updateError;
-            }
-          } else {
-            console.error('Error creating profile:', insertError);
-            throw insertError;
-          }
-        }
-
-        // Update user metadata after profile is created
-        const { error: updateError } = await supabase.auth.updateUser({
-          data: { name: name }
+      const { error: insertError } = await supabase
+        .from('profiles')
+        .insert({
+          id: user.id,
+          name: name,
+          xp: 0,
+          streak: 0,
+          completed_lessons: 0,
+          completed_quizzes: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
         });
-
-        if (updateError) {
-          console.error('Error updating user metadata:', updateError);
-          // Don't throw here, as the profile is already created
-        }
-
-        console.log('Profile operation completed successfully');
-        
-        // Set loading to false before navigation
-        setLoading(false);
-
-        // After successful registration and profile creation, navigate to Home
-        navigation.replace('Home');
-        return;
-      } catch (err) {
-        console.error('Profile operation error details:', {
-          message: err instanceof Error ? err.message : 'Unknown error',
-          name: err instanceof Error ? err.name : 'Unknown',
-          error: err
-        });
-        throw err;
+      if (insertError) {
+        throw insertError;
       }
+
+      setLoading(false);
+      navigation.replace('Home');
     } catch (err) {
-      console.error('Sign up error details:', {
-        message: err instanceof Error ? err.message : 'Unknown error',
-        name: err instanceof Error ? err.name : 'Unknown',
-        error: err
-      });
-      
       let errorMessage = 'Грешка при регистрация';
-      
       if (err instanceof Error) {
         if (err.message.includes('User already registered')) {
           errorMessage = 'Този имейл вече е регистриран';
@@ -203,14 +133,12 @@ export default function SignUpScreen({ navigation }: SignUpScreenProps) {
           errorMessage = 'Моля, въведете валиден имейл адрес';
         } else if (err.message.includes('Database error')) {
           errorMessage = 'Грешка в базата данни. Моля, опитайте отново по-късно.';
-          console.error('Database error during signup:', err);
         } else if (err.message.includes('duplicate key')) {
           errorMessage = 'Профилът вече съществува. Моля, опитайте да влезете.';
         } else if (err.message.includes('permission denied')) {
           errorMessage = 'Нямате необходимите права. Моля, опитайте отново по-късно.';
         }
       }
-      
       setError(errorMessage);
       Alert.alert('Грешка', errorMessage);
       setLoading(false);

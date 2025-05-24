@@ -1,16 +1,19 @@
 import Constants from 'expo-constants';
 
-// Use environment variables from app.config.ts
+// Get configuration from Expo Constants
+const extra = Constants.expoConfig?.extra || {};
+
 export const EMAILJS_CONFIG = {
-  SERVICE_ID: process.env.EXPO_PUBLIC_EMAILJS_SERVICE_ID || '',
-  TEMPLATE_ID: process.env.EXPO_PUBLIC_EMAILJS_TEMPLATE_ID || '',
-  PUBLIC_KEY: process.env.EXPO_PUBLIC_EMAILJS_PUBLIC_KEY || '',
+  SERVICE_ID: extra.emailjsServiceId || '',
+  TEMPLATE_ID: extra.emailjsTemplateId || '',
+  PUBLIC_KEY: extra.emailjsPublicKey || '',
 };
 
 // Debug logging
-console.log('Expo Config:', Constants.expoConfig?.extra);
-console.log('EmailJS Config Values:', {
-  serviceId: Constants.expoConfig?.extra?.emailjsServiceId,
-  templateId: Constants.expoConfig?.extra?.emailjsTemplateId,
-  publicKey: Constants.expoConfig?.extra?.emailjsPublicKey,
-}); 
+if (__DEV__) {
+  console.log('EmailJS Config Values:', {
+    serviceId: EMAILJS_CONFIG.SERVICE_ID,
+    templateId: EMAILJS_CONFIG.TEMPLATE_ID,
+    publicKey: EMAILJS_CONFIG.PUBLIC_KEY ? '***' : '', // Hide the actual key in logs
+  });
+} 

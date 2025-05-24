@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Animated, Dimensions } from 'react-native';
+import { View, StyleSheet, ScrollView, TouchableOpacity, Alert, ActivityIndicator, Animated, Dimensions, Platform } from 'react-native';
 import { Text, Button, Surface, ProgressBar, IconButton, Badge, useTheme } from 'react-native-paper';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useTheme as useCustomTheme, THEME } from '../ThemeContext';
@@ -1515,26 +1515,26 @@ const styles = StyleSheet.create({
     paddingBottom: 100,
   },
   heroContainer: {
-    height: 200, // Adjusted to account for all content + padding
+    height: SCREEN_HEIGHT * 0.23, // Responsive height
     marginBottom: 24,
-    overflow: 'hidden', // Ensure content doesn't overflow
+    overflow: 'hidden',
   },
   heroGradient: {
     flex: 1,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
-    padding: 16,
+    padding: SCREEN_WIDTH * 0.04, // Responsive padding
   },
   heroContent: {
     flex: 1,
     justifyContent: 'space-between',
-    minHeight: 0, // Important: allows content to shrink within flex container
+    minHeight: 0,
   },
   welcomeContainer: {
-    marginBottom: 12, // Reduced to fit better
+    marginBottom: 12,
   },
   welcomeText: {
-    fontSize: 24, // Slightly reduced
+    fontSize: SCREEN_WIDTH < 400 ? 20 : 24, // Responsive font size
     fontWeight: 'bold',
     color: '#FFFFFF',
     marginBottom: 4,
@@ -1543,21 +1543,20 @@ const styles = StyleSheet.create({
     textShadowRadius: 2,
   },
   welcomeSubtext: {
-    fontSize: 14,
+    fontSize: SCREEN_WIDTH < 400 ? 12 : 14,
     color: 'rgba(255, 255, 255, 0.9)',
     textShadowColor: 'rgba(0, 0, 0, 0.1)',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 2,
   },
   statsContainer: {
-    gap: 8,
+    flexDirection: 'column',
     width: '100%',
     paddingTop: 4,
   },
   statsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    gap: 12,
     width: '100%',
   },
   statPill: {
@@ -1566,76 +1565,89 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.12)',
     padding: 10,
     borderRadius: 16,
-    gap: 8,
+    marginRight: 8,
     height: 40,
     flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)', // subtle border
+    ...Platform.select({
+      web: {
+        boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+      },
+      default: {
+        elevation: 1,
+      },
+    }),
   },
   streakPill: {
     backgroundColor: 'rgba(255, 107, 107, 0.12)',
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,107,107,0.18)', // subtle border for streak
   },
   statTextContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    marginLeft: 6, // replaces gap
     flex: 1,
   },
   statValue: {
-    fontSize: 16,
-    fontFamily: 'System',
+    fontSize: SCREEN_WIDTH < 400 ? 14 : 16,
+    fontFamily: Platform.OS === 'web' ? undefined : 'System',
     fontWeight: '500',
     color: '#FFFFFF',
   },
   statLabel: {
-    fontSize: 13,
-    fontFamily: 'System',
+    fontSize: SCREEN_WIDTH < 400 ? 11 : 13,
+    fontFamily: Platform.OS === 'web' ? undefined : 'System',
     fontWeight: '500',
     color: 'rgba(255, 255, 255, 0.9)',
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
   lessonsSection: {
-    padding: 24,
+    padding: SCREEN_WIDTH < 400 ? 12 : 24,
   },
   sectionTitle: {
-    fontSize: 24,
+    fontSize: SCREEN_WIDTH < 400 ? 18 : 24,
     fontWeight: 'bold',
     color: '#1A1A1A',
     marginBottom: 8,
   },
   sectionSubtitle: {
-    fontSize: 16,
+    fontSize: SCREEN_WIDTH < 400 ? 13 : 16,
     color: '#666666',
     marginBottom: 24,
   },
   lessonCardContainer: {
-    marginBottom: 16,
+    marginBottom: SCREEN_WIDTH < 400 ? 10 : 16,
   },
   lessonCard: {
     borderRadius: 16,
-    padding: 20,
+    padding: SCREEN_WIDTH < 400 ? 12 : 20,
     backgroundColor: '#FFFFFF',
   },
   lessonHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: SCREEN_WIDTH < 400 ? 10 : 16,
   },
   iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: SCREEN_WIDTH < 400 ? 36 : 48,
+    height: SCREEN_WIDTH < 400 ? 36 : 48,
+    borderRadius: SCREEN_WIDTH < 400 ? 18 : 24,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 16,
+    marginRight: SCREEN_WIDTH < 400 ? 10 : 16,
   },
   lessonTitleContainer: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    marginLeft: SCREEN_WIDTH < 400 ? 4 : 8,
   },
   lessonTitle: {
-    fontSize: 18,
+    fontSize: SCREEN_WIDTH < 400 ? 15 : 18,
     fontWeight: 'bold',
     color: '#1A1A1A',
     flex: 1,
@@ -1643,17 +1655,17 @@ const styles = StyleSheet.create({
   premiumBadge: {
     backgroundColor: '#FFD700',
     color: '#000000',
-    fontSize: 12,
-    paddingHorizontal: 8,
+    fontSize: SCREEN_WIDTH < 400 ? 10 : 12,
+    paddingHorizontal: SCREEN_WIDTH < 400 ? 4 : 8,
   },
   lessonDescription: {
-    fontSize: 14,
+    fontSize: SCREEN_WIDTH < 400 ? 12 : 14,
     color: '#666666',
-    lineHeight: 20,
-    marginBottom: 20,
+    lineHeight: SCREEN_WIDTH < 400 ? 16 : 20,
+    marginBottom: SCREEN_WIDTH < 400 ? 12 : 20,
   },
   progressSection: {
-    marginBottom: 20,
+    marginBottom: SCREEN_WIDTH < 400 ? 12 : 20,
   },
   progressHeader: {
     flexDirection: 'row',
@@ -1662,16 +1674,16 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   progressLabel: {
-    fontSize: 14,
+    fontSize: SCREEN_WIDTH < 400 ? 12 : 14,
     color: '#666666',
   },
   progressPercentage: {
-    fontSize: 14,
+    fontSize: SCREEN_WIDTH < 400 ? 12 : 14,
     fontWeight: '600',
     color: '#1A1A1A',
   },
   progressBar: {
-    height: 8,
+    height: SCREEN_WIDTH < 400 ? 5 : 8,
     borderRadius: 4,
     backgroundColor: 'rgba(0, 0, 0, 0.05)',
   },
@@ -1681,11 +1693,11 @@ const styles = StyleSheet.create({
   actionButton: {
     width: '100%',
     borderRadius: 12,
-    height: 48,
+    height: SCREEN_WIDTH < 400 ? 36 : 48,
     justifyContent: 'center',
   },
   buttonLabel: {
-    fontSize: 14,
+    fontSize: SCREEN_WIDTH < 400 ? 12 : 14,
     fontWeight: '600',
   },
   premiumButton: {
@@ -1763,34 +1775,40 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   challengesSection: {
-    marginHorizontal: 24,
-    marginBottom: 24,
-    borderRadius: 20,
+    // Match lessonCard style
+    alignSelf: 'center',
+    width: '92%',
+    borderRadius: 16,
     backgroundColor: '#FFFFFF',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
+    ...Platform.select({
+      web: {
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+      },
+      default: {
+        elevation: 2,
+      },
+    }),
+    marginBottom: SCREEN_WIDTH < 400 ? 10 : 16,
     overflow: 'hidden',
+    // Remove maxHeight for consistency
   },
   challengesContent: {
     width: '100%',
   },
   challengesInnerContent: {
-    padding: 24,
-    height: '100%',
+    padding: SCREEN_WIDTH < 400 ? 12 : 24,
+    // Remove height: '100%' to prevent stretching
   },
   challengesHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     marginBottom: 12,
-    gap: 12,
+    marginRight: 12,
   },
   challengesIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: SCREEN_WIDTH < 400 ? 36 : 48,
+    height: SCREEN_WIDTH < 400 ? 36 : 48,
+    borderRadius: SCREEN_WIDTH < 400 ? 18 : 24,
     backgroundColor: 'rgba(255, 255, 255, 0.15)',
     justifyContent: 'center',
     alignItems: 'center',
@@ -1798,7 +1816,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   challengesTitle: {
-    fontSize: 20,
+    fontSize: SCREEN_WIDTH < 400 ? 13 : 20,
     fontWeight: 'bold',
     color: '#FFFFFF',
     textShadowColor: 'rgba(0, 0, 0, 0.1)',
@@ -1806,20 +1824,23 @@ const styles = StyleSheet.create({
     textShadowRadius: 2,
   },
   challengesDescription: {
-    fontSize: 15,
+    fontSize: SCREEN_WIDTH < 400 ? 11 : 15,
     color: 'rgba(255, 255, 255, 0.95)',
     marginBottom: 24,
-    lineHeight: 22,
+    lineHeight: SCREEN_WIDTH < 400 ? 16 : 22,
   },
   challengesButton: {
     backgroundColor: '#FF6B6B',
     borderRadius: 16,
-    height: 48,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
+    height: SCREEN_WIDTH < 400 ? 36 : 48,
+    ...Platform.select({
+      web: {
+        boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+      },
+      default: {
+        elevation: 2,
+      },
+    }),
     overflow: 'hidden',
   },
   challengesButtonInner: {
@@ -1827,11 +1848,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    marginLeft: 8,
   },
   challengesButtonText: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: SCREEN_WIDTH < 400 ? 12 : 16,
     fontWeight: '600',
     letterSpacing: 0.3,
   },

@@ -36,7 +36,8 @@
         "projectId": "21115eda-e4e5-4be8-89d3-f5f9c1ed9c0f"
       },
       "supabaseUrl": "https://tvjrolyteabegukldhln.supabase.co",
-      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2anJvbHl0ZWFiZWd1a2xkaGxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDY3MDkyMTQsImV4cCI6MjA2MjI4NTIxNH0.rWSopj0XKxyMtL8ggzWvajg4ilQkFgQjNm6sfvtHork"
-    }
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR2anJvbHl0ZWFiZWd1a2xkaGxuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc5NzQyNDksImV4cCI6MjA2MzU1MDI0OX0.3ChoUYbvY1LqWHhbdRc7QYPE6GYRh29mm-SSYAB6QnE"
+    },
+    "owner": "maria_ivanova"
   }
 }

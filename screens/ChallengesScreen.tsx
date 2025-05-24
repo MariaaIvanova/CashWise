@@ -350,12 +350,12 @@ const ChallengesScreen = () => {
         return;
       }
 
-      // Check for any previous attempts
+      // Check for any previous attempts in the new personality_test_results table
       const { data: attempts, error } = await supabase
-        .from('quiz_attempts')
+        .from('personality_test_results')
         .select('personality_type, completed_at')
         .eq('profile_id', user.id)
-        .eq('quiz_id', 'financial_personality')
+        .eq('test_id', 'financial_personality')
         .order('completed_at', { ascending: false })
         .limit(1)
         .single();

@@ -179,6 +179,10 @@ const CalendarScreen: React.FC<CalendarScreenProps> = ({ navigation }) => {
           </Text>
         </View>
       </View>
+      <View style={[styles.achievementsContainer, { borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.2)' }]}>
+        <Text style={[styles.comingSoonText, { color: '#FFFFFF' }]}>Постижения - Скоро</Text>
+        <Text style={[styles.comingSoonSubtext, { color: 'rgba(255,255,255,0.7)' }]}>Следете за нови постижения и награди!</Text>
+      </View>
     </Surface>
   );
 
@@ -286,16 +290,16 @@ const CalendarScreen: React.FC<CalendarScreenProps> = ({ navigation }) => {
                   firstDay={1}
                   markingType="custom"
                   markedDates={{
-                    ...learningData.markedDates,
+                    ...(learningData?.markedDates || {}),
                     [selectedDate]: selectedDate !== today ? {
-                      ...(learningData.markedDates[selectedDate] || {}),
+                      ...(learningData?.markedDates?.[selectedDate] || {}),
                       selected: true,
                       selectedColor: colors.primary,
                       customTextStyle: {
                         color: '#FFFFFF',
                         fontWeight: 'bold',
                       }
-                    } : learningData.markedDates[selectedDate]
+                    } : learningData?.markedDates?.[selectedDate]
                   }}
                   onDayPress={(day: { dateString: string }) => setSelectedDate(day.dateString)}
                   enableSwipeMonths={true}
@@ -465,6 +469,19 @@ const styles = StyleSheet.create({
     backgroundColor: '#e0e0e0',
     borderRadius: 8,
     margin: 16,
+  },
+  achievementsContainer: {
+    padding: 16,
+    alignItems: 'center',
+  },
+  comingSoonText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  comingSoonSubtext: {
+    fontSize: 14,
+    textAlign: 'center',
   },
 });
 

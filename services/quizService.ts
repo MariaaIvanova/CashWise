@@ -1,46 +1,7 @@
-import { supabase, database } from '../supabase';
-import { auth } from '../supabase';
+import { supabase, ensureProfile } from '../lib/supabase';
+import { QuizAttempt, QuizCompletionResult, QuizStats, QuizQuestion, Quiz } from '../types/quiz';
 
-export interface QuizAttempt {
-  id: string;
-  profile_id: string;
-  quiz_id: string;
-  score: number;
-  total_questions: number;
-  time_taken: number;
-  created_at: string;
-  completed_at: string;
-  personality_type?: string;
-}
-
-export interface QuizCompletionData {
-  score: number;
-  totalQuestions: number;
-  xpEarned: number;
-  timeBonus: number;
-  perfectScore: boolean;
-  passedQuiz: boolean;
-  previousBestScore: number;
-  attemptsCount: number;
-  recommendations: string[];
-  tips: string[];
-  personalityType?: string;
-  description?: string;
-  explanation?: string;
-  personalityColor?: string;
-  currentXP?: number;
-  newXP?: number;
-}
-
-export interface QuizResult {
-  score: number;
-  totalQuestions: number;
-  timeRemaining: number;
-  passed: boolean;
-  perfectScore: boolean;
-}
-
-class QuizService {
+export class QuizService {
   private static instance: QuizService;
   private readonly BASE_XP = 100;
   private readonly PERFECT_SCORE_BONUS = 50;
@@ -65,9 +26,14 @@ class QuizService {
   }
 
   private async getPreviousAttempts(userId: string, quizId: string): Promise<QuizAttempt[]> {
-    const { data, error } = await database.getQuizAttempts(userId);
+    const { data, error } = await supabase
+      .from('quiz_attempts')
+      .select('*')
+      .eq('profile_id', userId)
+      .eq('quiz_id', quizId)
+      .order('completed_at', { ascending: false });
     if (error) throw error;
-    return (data as QuizAttempt[] || []).filter(attempt => attempt.quiz_id === quizId);
+    return data || [];
   }
 
   private async calculateXP(
@@ -170,107 +136,156 @@ class QuizService {
     return { recommendations, tips };
   }
 
-  public async completeQuiz(
+  async completeQuiz(
     quizId: string,
-    result: QuizResult,
-    personalityType?: string
-  ): Promise<QuizCompletionData> {
+    score: number,
+    totalQuestions: number,
+    timeTaken: number
+  ): Promise<QuizCompletionResult> {
     try {
-      const { user, error: userError } = await auth.getCurrentUser();
-      if (userError || !user) throw new Error('User not found');
+      // Ensure user is authenticated and has a profile
+      const profile = await ensureProfile();
 
-      // Get current profile for XP
-      const { data: profile, error: profileError } = await database.getProfile(user.id);
-      if (profileError || !profile) throw new Error('Profile not found');
-
-      const currentXP = profile.xp || 0;
-      const attempts = await this.getPreviousAttempts(user.id, quizId);
-      const { xpEarned, previousBestScore } = await this.calculateXP(user.id, quizId, result);
-      const { recommendations, tips } = this.generateRecommendations(
-        result,
-        attempts.length,
-        previousBestScore
-      );
-
-      // Insert quiz attempt
-      const { error: insertError } = await supabase
-        .from('quiz_attempts')
-        .insert({
-          profile_id: user.id,
-          quiz_id: quizId,
-          score: result.score,
-          total_questions: result.totalQuestions,
-          time_taken: 60 - result.timeRemaining,
-          personality_type: personalityType,
-          completed_at: new Date().toISOString()
+      // Call the complete_quiz function
+      const { data, error } = await supabase
+        .rpc('complete_quiz', {
+          p_profile_id: profile.id,
+          p_quiz_id: quizId,
+          p_score: score,
+          p_total_questions: totalQuestions,
+          p_time_taken: timeTaken
         });
 
-      if (insertError) throw insertError;
-
-      // Convert quizId to integer
-      const quizIdInt = parseInt(quizId, 10);
-      if (isNaN(quizIdInt)) {
-        throw new Error('Invalid quiz ID format');
+      if (error) {
+        console.error('Error completing quiz:', error);
+        throw error;
       }
 
-      // Update profile XP and completed quizzes
-      const { error: updateError } = await supabase
-        .rpc('update_profile_quiz_completion', {
-          p_user_id: user.id,
-          p_xp: currentXP + xpEarned,
-          p_completed_quizzes: quizIdInt,  // Pass single integer instead of array
-          p_updated_at: new Date().toISOString()
-        });
-
-      if (updateError) throw updateError;
-
-      // If quiz is passed, mark the lesson as complete
-      if (result.passed) {
-        const { error: lessonError } = await supabase
-          .rpc('complete_lesson', {
-            p_user_id: user.id,
-            p_lesson_id: quizId,
-            p_xp_earned: xpEarned,
-            p_current_xp: currentXP,
-            p_current_completed_lessons: profile.completed_lessons || 0
-          });
-
-        if (lessonError) {
-          console.error('Error marking lesson as complete:', lessonError);
-          // Don't throw here, as the quiz completion was successful
-        }
+      if (!data || data.length === 0) {
+        throw new Error('No data returned from quiz completion');
       }
 
+      const result = data[0];
       return {
-        score: result.score,
-        totalQuestions: result.totalQuestions,
-        xpEarned,
-        timeBonus: this.calculateTimeBonus(result.timeRemaining),
-        perfectScore: result.perfectScore,
-        passedQuiz: result.passed,
-        previousBestScore,
-        attemptsCount: attempts.length,
-        recommendations,
-        tips,
-        personalityType,
-        currentXP,
-        newXP: currentXP + xpEarned
+        xpEarned: result.xp_earned,
+        isPerfect: result.is_perfect,
+        passed: result.passed,
+        quizId
       };
     } catch (error) {
-      console.error('Error completing quiz:', error);
+      console.error('Error in completeQuiz:', error);
       throw error;
     }
   }
 
-  public async checkPreviousAttempts(quizId: string): Promise<boolean> {
+  async getQuizAttempts(quizId: string): Promise<QuizAttempt[]> {
     try {
-      const { user, error: userError } = await auth.getCurrentUser();
-      if (userError || !user) throw new Error('User not found');
+      // Ensure user is authenticated and has a profile
+      await ensureProfile();
 
-      const attempts = await this.getPreviousAttempts(user.id, quizId);
-      return attempts.length > 0;
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('*')
+        .eq('quiz_id', quizId)
+        .order('completed_at', { ascending: false });
+
+      if (error) {
+        console.error('Error fetching quiz attempts:', error);
+        throw error;
+      }
+
+      return data || [];
     } catch (error) {
-      console.error('Error checking previous attempts:', error);
+      console.error('Error in getQuizAttempts:', error);
+      throw error;
+    }
+  }
+
+  async getQuizStats(quizId: string): Promise<QuizStats> {
+    try {
+      // Ensure user is authenticated and has a profile
+      await ensureProfile();
+
+      const { data, error } = await supabase
+        .from('quiz_attempts')
+        .select('score, total_questions, is_perfect')
+        .eq('quiz_id', quizId);
+
+      if (error) {
+        console.error('Error fetching quiz stats:', error);
+        throw error;
+      }
+
+      if (!data || data.length === 0) {
+        return {
+          totalAttempts: 0,
+          averageScore: 0,
+          bestScore: 0,
+          perfectAttempts: 0
+        };
+      }
+
+      const totalAttempts = data.length;
+      const perfectAttempts = data.filter((attempt: QuizAttempt) => attempt.is_perfect).length;
+      const averageScore = data.reduce((sum: number, attempt: QuizAttempt) => 
+        sum + (attempt.score / attempt.total_questions), 0) / totalAttempts * 100;
+      const bestScore = Math.max(...data.map((attempt: QuizAttempt) => 
+        (attempt.score / attempt.total_questions) * 100));
+
+      return {
+        totalAttempts,
+        averageScore,
+        bestScore,
+        perfectAttempts
+      };
+    } catch (error) {
+      console.error('Error in getQuizStats:', error);
+      throw error;
+    }
+  }
+
+  async getQuiz(quizId: string): Promise<Quiz | null> {
+    try {
+      // Ensure user is authenticated and has a profile
+      await ensureProfile();
+
+      const { data, error } = await supabase
+        .from('quizzes')
+        .select('*')
+        .eq('id', quizId)
+        .single();
+
+      if (error) {
+        console.error('Error fetching quiz:', error);
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      console.error('Error in getQuiz:', error);
+      throw error;
+    }
+  }
+
+  async getQuizQuestions(quizId: string): Promise<QuizQuestion[]> {
+    try {
+      // Ensure user is authenticated and has a profile
+      await ensureProfile();
+
+      const { data, error } = await supabase
+        .from('quiz_questions')
+        .select('*')
+        .eq('quiz_id', quizId)
+        .order('id');
+
+      if (error) {
+        console.error('Error fetching quiz questions:', error);
+        throw error;
+      }
+
+      return data || [];
+    } catch (error) {
+      console.error('Error in getQuizQuestions:', error);
       throw error;
     }
   }

@@ -190,10 +190,10 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
       }
 
       const { data, error } = await supabase
-        .from('quiz_attempts')
+        .from('personality_test_results')
         .select('personality_type')
         .eq('profile_id', user.id)
-        .eq('quiz_id', 'financial_personality')
+        .eq('test_id', 'financial_personality')
         .single();
 
       if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
@@ -313,19 +313,33 @@ export const FinancialPersonalityTest = ({ onComplete, onClose }: {
         return;
       }
 
+      // Save to the new personality_test_results table
       const { error } = await supabase
-        .from('quiz_attempts')
+        .from('personality_test_results')
         .insert({
           profile_id: user.id,
-          quiz_id: 'financial_personality',
-          score: 0,
-          total_questions: questions.length,
-          time_taken: 0,
+          test_id: 'financial_personality',
           personality_type: type,
-          completed_at: new Date().toISOString(),
+          score: Object.values(answers).length,
+          total_questions: questions.length,
+          time_taken: 0, // We don't track time for personality test
+          completed_at: new Date().toISOString()
         });
 
       if (error) throw error;
+
+      // Update profile XP and record learning activity
+      const { error: updateError } = await supabase.rpc('complete_financial_personality', {
+        p_profile_id: user.id,
+        p_quiz_id: 'financial_personality',
+        p_score: Object.values(answers).length,
+        p_time_taken: 0,
+        p_total_questions: questions.length,
+        p_personality_type: type
+      });
+
+      if (updateError) throw updateError;
+
       setHasAttempted(true);
     } catch (error) {
       console.error('Error saving test result:', error);

@@ -609,53 +609,22 @@ const ProfileScreen: React.FC<ProfileScreenProps> = ({ navigation }) => {
     </Surface>
   );
 
-  const renderAchievements = () => {
-    const completedAchievements = userData.achievements.filter(achievement => achievement.completed);
-
-    return (
-      <Surface style={cardStyle}>
-        <Text variant="titleMedium" style={{ color: '#000000', marginBottom: 20, fontSize: 18, fontWeight: '600' }}>
-          Постижения
+  const renderAchievements = () => (
+    <Surface style={cardStyle}>
+      <Text variant="titleMedium" style={{ color: '#000000', marginBottom: 20, fontSize: 18, fontWeight: '600' }}>
+        Постижения
+      </Text>
+      <View style={styles.emptyAchievementsContainer}>
+        <MaterialCommunityIcons name="trophy-outline" size={48} color="#BDBDBD" />
+        <Text style={styles.emptyAchievementsText}>
+          Скоро
         </Text>
-        {completedAchievements.length > 0 ? (
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-            {completedAchievements.map((achievement: Achievement) => (
-              <View key={achievement.id} style={styles.achievementContainer}>
-                <View style={styles.achievementIconContainer}>
-                  <MaterialCommunityIcons
-                    name={achievement.icon || 'trophy'}
-                    size={28}
-                    color="#8A97FF"
-                  />
-                  <View style={styles.achievementCheckmark}>
-                    <MaterialCommunityIcons name="check" size={16} color="#FFFFFF" />
-                  </View>
-                </View>
-                <View style={styles.achievementInfo}>
-                  <Text style={[styles.achievementTitle, { color: '#8A97FF' }]}>
-                    {achievement.title}
-                  </Text>
-                  <Text style={styles.achievementDescription}>
-                    {achievement.description}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <View style={styles.emptyAchievementsContainer}>
-            <MaterialCommunityIcons name="trophy-outline" size={48} color="#BDBDBD" />
-            <Text style={styles.emptyAchievementsText}>
-              Все още нямате постижения
-            </Text>
-            <Text style={styles.emptyAchievementsSubtext}>
-              Започнете да учите и да изпълнявате задачи, за да отключите постижения
-            </Text>
-          </View>
-        )}
-      </Surface>
-    );
-  };
+        <Text style={styles.emptyAchievementsSubtext}>
+          Системата за постижения ще бъде достъпна скоро. Следете за актуализации!
+        </Text>
+      </View>
+    </Surface>
+  );
 
   const renderInterests = () => (
     <Surface style={cardStyle}>

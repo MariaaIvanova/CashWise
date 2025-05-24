@@ -7,9 +7,10 @@ import { Appbar } from 'react-native-paper';
 import { ParamListBase } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RouteProp } from '@react-navigation/native';
-import { auth, database, supabase } from '../supabase';
+import { supabase } from '../lib/supabase';
 import BottomNavigationBar, { TabKey } from '../components/BottomNavigationBar';
 import { quizService, QuizCompletionData, QuizResult } from '../services/quizService';
+import { RootStackParamList } from '../AppNavigator';
 
 interface Profile {
   id: string;
@@ -97,7 +98,7 @@ interface QuizState {
   currentQuestionIndex: number;
   selectedAnswer: string | null;
   selectedAnswers: string[];
-  matchingAnswers: { [key: string]: string };
+  matchingAnswers: Record<string, string>;
   score: number;
   quizCompleted: boolean;
   showResult: boolean;
@@ -105,7 +106,22 @@ interface QuizState {
   hasAttemptedTest: boolean;
   loadingAttempts: boolean;
   loadingCompletion: boolean;
-  completionData: QuizCompletionData | null;
+  completionData: {
+    score: number;
+    totalQuestions: number;
+    passedQuiz: boolean;
+    perfectScore: boolean;
+    profileId: string;
+    xpEarned: number;
+    currentXP?: number;
+    newXP?: number;
+    timeBonus: number;
+    recommendations: string[];
+    tips: string[];
+    attemptsCount: number;
+    previousBestScore: number;
+    personalityType?: string;
+  } | null;
   answeredCorrectly: boolean;
   currentQuestion: Question | null;
 }
@@ -247,12 +263,13 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
       // Calculate completion data and save results
       const completeQuiz = async () => {
         try {
-          const { user, error: userError } = await auth.getCurrentUser();
+          // Get the current user directly from supabase auth
+          const { data: { user }, error: userError } = await supabase.auth.getUser();
           if (userError || !user) {
             throw new Error('User not found');
           }
 
-          const quizResult: QuizResult = {
+          const quizResult = {
             score: state.score,
             totalQuestions: state.questions.length,
             timeRemaining: state.timeRemaining,
@@ -260,14 +277,98 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
             perfectScore: isPerfectScore
           };
 
-          const completionData = await quizService.completeQuiz(
-            route.params.lessonId,
-            quizResult
+          // Determine personality type for financial personality quiz
+          let personalityType = null;
+          if (route.params.lessonId === 'financial_personality') {
+            // Calculate personality type based on selected answers
+            const answerCounts = state.selectedAnswers.reduce((acc, answer) => {
+              acc[answer] = (acc[answer] || 0) + 1;
+              return acc;
+            }, {} as Record<string, number>);
+
+            // Get the most frequent answer
+            const maxCount = Math.max(...Object.values(answerCounts));
+            const dominantType = Object.entries(answerCounts)
+              .find(([_, count]) => count === maxCount)?.[0];
+            
+            personalityType = dominantType || 'balanced';
+          }
+
+          // Call the appropriate RPC function based on quiz type
+          const { data, error } = await supabase.rpc(
+            route.params.lessonId === 'financial_personality' ? 'complete_financial_personality' : 'complete_quiz',
+            {
+              p_profile_id: user.id,
+              p_quiz_id: route.params.lessonId,
+              p_score: state.score,
+              p_time_taken: 300 - state.timeRemaining, // Convert remaining time to time taken
+              p_total_questions: state.questions.length,
+              ...(route.params.lessonId === 'financial_personality' ? { p_personality_type: personalityType } : {})
+            }
           );
+
+          if (error) {
+            console.error('Error completing quiz:', error);
+            throw error;
+          }
+
+          if (!data) {
+            throw new Error('No data returned from quiz completion');
+          }
+
+          // If quiz was passed, mark the lesson as completed
+          if (data.passed) {
+            // Get current profile data
+            const { data: profile, error: profileError } = await supabase
+              .from('profiles')
+              .select('xp, completed_lessons')
+              .eq('id', user.id)
+              .single();
+
+            if (profileError) {
+              console.error('Error fetching profile:', profileError);
+              throw profileError;
+            }
+
+            // Call complete_lesson function to mark lesson as completed
+            const { error: lessonError } = await supabase.rpc('complete_lesson', {
+              p_user_id: user.id,
+              p_lesson_id: route.params.lessonId,
+              p_xp_earned: data.xp_earned,
+              p_current_xp: profile.xp,
+              p_current_completed_lessons: profile.completed_lessons
+            });
+
+            if (lessonError) {
+              console.error('Error marking lesson as completed:', lessonError);
+              throw lessonError;
+            }
+          }
 
           // Update state with completion data
           updateState({
-            completionData,
+            completionData: {
+              score: state.score,
+              totalQuestions: state.questions.length,
+              xpEarned: data.xp_earned,
+              timeBonus: 0, // You can calculate this if needed
+              perfectScore: data.is_perfect,
+              passedQuiz: data.passed,
+              previousBestScore: 0, // You can fetch this if needed
+              attemptsCount: 0, // You can fetch this if needed
+              currentXP: 0, // You can fetch this if needed
+              newXP: 0, // You can fetch this if needed
+              personalityType: data.personality_type, // Add personality type to completion data
+              recommendations: [
+                data.passed ? "Поздравления! Преминахте теста успешно!" : "Опитайте отново, за да преминете теста.",
+                data.is_perfect ? "Перфектен резултат! Отлично представяне!" : "Добър резултат!",
+                data.personality_type ? `Вашият финансов тип е: ${data.personality_type}` : ""
+              ].filter(Boolean), // Remove empty strings
+              tips: [
+                "Продължете да учите и да подобрявате знанията си.",
+                "Регулярното обучение е ключът към успеха."
+              ]
+            },
             loadingCompletion: false
           });
 
@@ -275,19 +376,14 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
           navigation.setParams({
             ...route.params,
             completed: true,
-            score: completionData.score,
-            totalQuestions: completionData.totalQuestions,
-            xpEarned: completionData.xpEarned,
-            currentXP: completionData.currentXP,
-            newXP: completionData.newXP
+            score: state.score,
+            totalQuestions: state.questions.length,
+            xpEarned: data.xp_earned,
+            currentXP: 0, // You can fetch this if needed
+            newXP: data.xp_earned, // You can calculate this if needed
+            personalityType: data.personality_type // Add personality type to navigation params
           });
 
-          // Remove automatic navigation
-          // if (passedQuiz) {
-          //   setTimeout(() => {
-          //     navigation.goBack();
-          //   }, 1000);
-          // }
         } catch (error) {
           console.error('Error in quiz completion:', error);
           // Even if saving fails, show the completion screen with error state
@@ -304,6 +400,7 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
               attemptsCount: 0,
               currentXP: 0,
               newXP: 0,
+              personalityType: null,
               recommendations: [
                 "Възникна грешка при запазване на резултата.",
                 "Моля, опитайте отново по-късно."
@@ -325,25 +422,33 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
   const saveQuizResults = async () => {
     // This function is now just a wrapper for the completion logic
     // The actual logic has been moved to handleNextQuestion
-    console.log('saveQuizResults is deprecated, using handleNextQuestion instead');
   };
 
   const checkPreviousAttempts = async () => {
-    console.log('checkPreviousAttempts: Starting check for lessonId:', route.params.lessonId);
-    
-    // For regular quizzes, we don't need to check attempts
-    if (route.params.lessonId !== 'daily-challenge') {
-      console.log('checkPreviousAttempts: This is a regular quiz, no need to check attempts');
-      updateState({ loadingAttempts: false });
-      return;
-    }
-
-    console.log('checkPreviousAttempts: This is a daily challenge quiz');
-    updateState({ loadingAttempts: true });
-    
     try {
-      const hasAttempted = await quizService.checkPreviousAttempts(route.params.lessonId);
-      console.log('checkPreviousAttempts: Has attempted:', hasAttempted);
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'SignIn' }],
+        });
+        return;
+      }
+
+      const { data: attempts, error } = await supabase
+        .from('quiz_attempts')
+        .select('*')
+        .eq('profile_id', user.id)
+        .eq('quiz_id', route.params.lessonId)
+        .order('completed_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        throw error;
+      }
+
+      const hasAttempted = !!attempts;
       updateState({ 
         hasAttemptedTest: hasAttempted,
         loadingAttempts: false 
@@ -361,11 +466,7 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
 
   // Add useEffect to load questions from route params
   useEffect(() => {
-    console.log('QuizScreen: Received route params:', route.params);
-    console.log('QuizScreen: Current state:', state);
-    
     if (route.params.questions) {
-      console.log('QuizScreen: Questions received:', route.params.questions);
       const questions = route.params.questions;
       setState(prev => {
         const newState = {
@@ -383,11 +484,9 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
           timeRemaining: 60,
           answeredCorrectly: false
         };
-        console.log('QuizScreen: New state after setting questions:', newState);
         return newState;
       });
     } else {
-      console.log('QuizScreen: No questions received in route params');
       setState(prev => {
         const newState = {
           ...prev,
@@ -395,7 +494,6 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
           error: 'No questions available for this quiz',
           currentQuestion: null
         };
-        console.log('QuizScreen: New state after setting error:', newState);
         return newState;
       });
     }
@@ -403,7 +501,6 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
 
   // Add useEffect to check for previous attempts
   useEffect(() => {
-    console.log('QuizScreen: Checking previous attempts for lessonId:', route.params.lessonId);
     checkPreviousAttempts();
   }, [route.params.lessonId]);
 
@@ -415,7 +512,6 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
   }, [route.params.lessonId]);
 
   const calculateQuizCompletion = async (userId: string): Promise<QuizCompletionData> => {
-    console.log('calculateQuizCompletion: Starting calculation');
     const baseXP = 100;
     const perfectScoreBonus = 50;
     const timeBonus = Math.floor((state.timeRemaining / 60) * 10);
@@ -423,19 +519,9 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
     const passedQuiz = scorePercentage >= 80;
     const isPerfectScore = state.score === state.questions.length;
 
-    console.log('calculateQuizCompletion: Initial values:', {
-      baseXP,
-      perfectScoreBonus,
-      timeBonus,
-      scorePercentage,
-      passedQuiz,
-      isPerfectScore
-    });
-
     // Get previous quiz attempts
     const { data: previousAttempts, error: attemptsError } = await database.getQuizAttempts(userId);
     if (attemptsError) {
-      console.error('calculateQuizCompletion: Error fetching previous attempts:', attemptsError);
       throw attemptsError;
     }
 
@@ -446,11 +532,6 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
     const previousBestScore = attempts.length > 0 
       ? Math.max(...attempts.map(attempt => (attempt.score / attempt.total_questions) * 100))
       : 0;
-
-    console.log('calculateQuizCompletion: Previous attempts data:', {
-      attemptsCount: attempts.length,
-      previousBestScore
-    });
 
     let xpEarned = 0;
     if (passedQuiz) {
@@ -474,12 +555,6 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
         xpEarned += timeBonus;
       }
     }
-
-    console.log('calculateQuizCompletion: XP calculation:', {
-      xpEarned,
-      isPerfectScore,
-      passedQuiz
-    });
 
     const recommendations: string[] = [];
     const tips: string[] = [];
@@ -551,19 +626,11 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
       tips
     };
 
-    console.log('calculateQuizCompletion: Final completion data:', completionData);
     return completionData;
   };
 
   const renderQuizCompletion = () => {
-    console.log('renderQuizCompletion: Starting render with state:', {
-      loadingCompletion: state.loadingCompletion,
-      hasCompletionData: !!state.completionData,
-      quizCompleted: state.quizCompleted
-    });
-
     if (state.loadingCompletion) {
-      console.log('renderQuizCompletion: Still loading completion data');
       return (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={themeColors.primary} />
@@ -573,7 +640,6 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
     }
 
     if (!state.completionData) {
-      console.log('renderQuizCompletion: No completion data available');
       return (
         <View style={styles.loadingContainer}>
           <Text style={styles.errorText}>Грешка при зареждане на резултата</Text>
@@ -633,113 +699,147 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
             
             {!passedQuiz && (
               <Text style={styles.passingScoreText}>
-                Необходими са поне 80% за преминаване
+                Необходими са поне 80% за преминаване на теста
               </Text>
             )}
           </View>
 
-          {/* XP Section - Only show if passed */}
-          {passedQuiz && completionData.xpEarned > 0 && (
+          {/* XP Section */}
+          {passedQuiz && (
             <View style={styles.xpSection}>
-              <MaterialCommunityIcons name="star" size={24} color="#FFD700" />
+              <MaterialCommunityIcons name="star" size={32} color="#FFD700" />
               <View style={styles.xpTextContainer}>
                 <Text style={styles.xpText}>
-                  Печелите {completionData.xpEarned} XP
+                  +{completionData.xpEarned} XP
                 </Text>
-                {completionData.currentXP !== undefined && completionData.newXP !== undefined && (
-                  <Text style={styles.xpTotalText}>
-                    Нова XP: {completionData.newXP}
-                  </Text>
-                )}
                 {completionData.timeBonus > 0 && (
                   <Text style={styles.bonusText}>
-                    (+{completionData.timeBonus} бонус за бързина)
+                    +{completionData.timeBonus} XP бонус за бързина
                   </Text>
                 )}
+                <Text style={styles.xpTotalText}>
+                  Общо: {completionData.newXP} XP
+                </Text>
               </View>
             </View>
           )}
 
           {/* Recommendations Section */}
-          <View style={styles.recommendationsSection}>
-            <View style={styles.sectionHeader}>
-              <MaterialCommunityIcons name="lightbulb" size={24} color={primaryColor} />
-              <Text style={[styles.sectionTitle, { color: textColor }]}>Препоръки</Text>
-            </View>
-            {completionData.recommendations.map((rec, index) => (
-              <View key={index} style={styles.recommendationItem}>
-                <MaterialCommunityIcons 
-                  name="check-circle" 
-                  size={20} 
-                  color={primaryColor} 
-                />
-                <Text style={styles.recommendationText}>{rec}</Text>
+          {completionData.recommendations.length > 0 && (
+            <View style={styles.recommendationsSection}>
+              <View style={styles.sectionHeader}>
+                <MaterialCommunityIcons name="lightbulb" size={24} color={primaryColor} />
+                <Text style={[styles.sectionTitle, { color: textColor }]}>
+                  Препоръки
+                </Text>
               </View>
-            ))}
-          </View>
+              {completionData.recommendations.map((recommendation, index) => (
+                <View key={index} style={styles.recommendationItem}>
+                  <MaterialCommunityIcons 
+                    name="check-circle" 
+                    size={20} 
+                    color={primaryColor} 
+                  />
+                  <Text style={styles.recommendationText}>
+                    {recommendation}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
 
           {/* Tips Section */}
-          <View style={styles.tipsSection}>
-            <View style={styles.sectionHeader}>
-              <MaterialCommunityIcons name="school" size={24} color={primaryColor} />
-              <Text style={[styles.sectionTitle, { color: textColor }]}>Съвети</Text>
-            </View>
-            {completionData.tips.map((tip, index) => (
-              <View key={index} style={styles.tipItem}>
-                <MaterialCommunityIcons 
-                  name="arrow-right" 
-                  size={20} 
-                  color={primaryColor} 
-                />
-                <Text style={styles.tipText}>{tip}</Text>
+          {completionData.tips.length > 0 && (
+            <View style={styles.tipsSection}>
+              <View style={styles.sectionHeader}>
+                <MaterialCommunityIcons name="book-open-variant" size={24} color={primaryColor} />
+                <Text style={[styles.sectionTitle, { color: textColor }]}>
+                  Съвети
+                </Text>
               </View>
-            ))}
-          </View>
+              {completionData.tips.map((tip, index) => (
+                <View key={index} style={styles.tipItem}>
+                  <MaterialCommunityIcons 
+                    name="information" 
+                    size={20} 
+                    color={primaryColor} 
+                  />
+                  <Text style={styles.tipText}>
+                    {tip}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
 
-          {/* Action Button */}
+          {/* Action Buttons */}
           <View style={styles.actionButtonsContainer}>
-            {passedQuiz ? (
-              <Button
-                mode="contained"
-                onPress={() => navigation.goBack()}
-                style={[styles.completionButton, { backgroundColor: primaryColor }]}
-                labelStyle={styles.completionButtonLabel}
-                icon="home"
-              >
-                Към началната страница
-              </Button>
-            ) : (
+            {!passedQuiz ? (
               <>
-          <Button
-            mode="contained"
-            onPress={() => {
-                setState({
-                  ...state,
-                  currentQuestionIndex: 0,
+                <Button
+                  mode="contained"
+                  onPress={() => {
+                    setState({
+                      ...state,
+                      currentQuestionIndex: 0,
                       currentQuestion: state.questions[0],
-                  selectedAnswer: null,
-                  selectedAnswers: [],
-                  matchingAnswers: {},
-                  score: 0,
-                  showResult: false,
-                  timeRemaining: 60,
+                      selectedAnswer: null,
+                      selectedAnswers: [],
+                      matchingAnswers: {},
+                      score: 0,
+                      showResult: false,
+                      timeRemaining: 60,
                       quizCompleted: false,
-                  completionData: null,
-                  answeredCorrectly: false
-                });
-            }}
+                      completionData: null,
+                      answeredCorrectly: false
+                    });
+                  }}
                   style={[styles.completionButton, { backgroundColor: primaryColor }]}
                   labelStyle={styles.completionButtonLabel}
                   icon="refresh"
-          >
+                >
                   Опитайте отново
-          </Button>
+                </Button>
                 <Button
                   mode="contained"
                   onPress={() => navigation.goBack()}
                   style={[styles.completionButton, { backgroundColor: primaryColor, marginTop: 12 }]}
                   labelStyle={styles.completionButtonLabel}
-                  icon="book-open-page-variant"
+                >
+                  Обратно към урока
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  mode="contained"
+                  onPress={() => {
+                    setState({
+                      ...state,
+                      currentQuestionIndex: 0,
+                      currentQuestion: state.questions[0],
+                      selectedAnswer: null,
+                      selectedAnswers: [],
+                      matchingAnswers: {},
+                      score: 0,
+                      showResult: false,
+                      timeRemaining: 60,
+                      quizCompleted: false,
+                      completionData: null,
+                      answeredCorrectly: false
+                    });
+                  }}
+                  style={[styles.completionButton, { backgroundColor: primaryColor }]}
+                  labelStyle={styles.completionButtonLabel}
+                  icon="refresh"
+                >
+                  Опитайте отново
+                </Button>
+                <Button
+                  mode="contained"
+                  onPress={() => navigation.goBack()}
+                  style={[styles.completionButton, { backgroundColor: primaryColor, marginTop: 12 }]}
+                  labelStyle={styles.completionButtonLabel}
                 >
                   Обратно към урока
                 </Button>
@@ -759,7 +859,7 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
       <View style={styles.matchingContainer}>
         <Text style={styles.matchingText}>
           Matching questions are not supported in this version.
-                  </Text>
+        </Text>
       </View>
     );
   };
@@ -798,7 +898,7 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
             <View style={styles.timerContainer}>
               <MaterialCommunityIcons name="clock-outline" size={20} color={themeColors.primary} />
               <Text style={styles.timerText}>{state.timeRemaining} сек</Text>
-          </View>
+            </View>
           </View>
 
           <View style={styles.questionContent}>
@@ -895,6 +995,13 @@ export default function QuizScreen({ navigation, route }: QuizScreenProps) {
       </View>
     );
   };
+
+  // Add test button to the header
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => null
+    });
+  }, [navigation]);
 
 const styles = StyleSheet.create({
   container: {
@@ -1193,6 +1300,9 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginTop: 4
   },
+  testButton: undefined,
+  debugButton: undefined,
+  debugButtonLabel: undefined,
 });
 
   return (
@@ -1203,12 +1313,8 @@ const styles = StyleSheet.create({
         <ScrollView 
           style={styles.mainScrollView}
           contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={true}
-          bounces={true}
         >
-          <View style={styles.contentWrapper}>
-            {renderQuestion()}
-          </View>
+          {renderQuestion()}
         </ScrollView>
       )}
     </View>

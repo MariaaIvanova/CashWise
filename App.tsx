@@ -53,11 +53,6 @@ export default function App() {
 
   const getSessionWithRetry = async (timeout: number, attempt: number = 1) => {
     try {
-      // Only log retry attempts if we're retrying
-      if (attempt > 1) {
-        console.log(`[App] Retry attempt ${attempt}/${MAX_RETRIES}`);
-      }
-      
       // Get current user with timeout
       const userTimeoutPromise = new Promise((_, reject) => 
         setTimeout(() => reject(new Error(`getCurrentUser timed out after ${timeout}ms`)), timeout)
@@ -68,9 +63,7 @@ export default function App() {
       
       const { user, error: userError } = userResult;
 
-      // Only log errors, not normal "no session" state
       if (userError && !userError.message.includes('Auth session missing')) {
-        console.error('[App] User check error:', userError);
         throw userError;
       }
 
@@ -84,9 +77,7 @@ export default function App() {
       
       const { session: currentSession, error: sessionError } = sessionResult;
 
-      // Only log errors, not normal "no session" state
       if (sessionError && !sessionError.message.includes('Auth session missing')) {
-        console.error('[App] Session check error:', sessionError);
         throw sessionError;
       }
 
@@ -129,14 +120,12 @@ export default function App() {
 
   const clearPersistedSession = async () => {
     try {
-      console.log('[App] Clearing persisted session data');
       await AsyncStorage.removeItem('supabase.auth.token');
       await AsyncStorage.removeItem('supabase.auth.refreshToken');
       await AsyncStorage.removeItem('supabase.auth.expiresAt');
       await AsyncStorage.removeItem('supabase.auth.user');
-      console.log('[App] Persisted session data cleared');
     } catch (error) {
-      console.error('[App] Error clearing persisted session:', error);
+      // Silently fail on error clearing persisted session
     }
   };
 
@@ -146,14 +135,10 @@ export default function App() {
       setRetryCount(0);
       setDebugInfo({});
       
-      // Clear any persisted session data first
-      await clearPersistedSession();
-      
       // Try to get session with retry logic
       const { session, error } = await getSessionWithRetry(INITIAL_TIMEOUT);
 
       if (error) {
-        console.error('[App] Initialization error:', error);
         const errorObj = error as { message?: string };
         const errorMessage = errorObj?.message || String(error);
           
@@ -185,7 +170,6 @@ export default function App() {
         subscription.unsubscribe();
       };
     } catch (error) {
-      console.error('[App] Initialization error:', error);
       setInitError(error as Error);
       setRetryCount(prev => prev + 1);
     } finally {
@@ -195,8 +179,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    console.log('[App] Starting app initialization');
-    initializeApp();
+    // Clear any persisted auth state before initializing
+    clearPersistedSession().then(() => {
+      initializeApp();
+    });
   }, []);
 
   const handleRetry = () => {
@@ -205,15 +191,6 @@ export default function App() {
     setRetryCount(0);
     initializeApp();
   };
-
-  console.log('[App] Render state:', {
-    isInitialized,
-    isAuthenticated,
-    hasError: !!initError,
-    errorMessage: initError?.message,
-    isLoading,
-    retryCount
-  });
 
   if (isLoading) {
     return (
@@ -262,7 +239,6 @@ export default function App() {
     );
   }
 
-  console.log('[App] Rendering main app component');
   return (
     <PaperProvider theme={noAnimationTheme}>
       <ThemeProvider>

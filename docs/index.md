@@ -2,7 +2,7 @@
 
 ## English Version
 
-### Last Updated: [Current Date]
+### Last Updated: May 24, 2025
 
 ### 1. Introduction
 Welcome to FinanceApp. We respect your privacy and are committed to protecting your personal data. This privacy policy will inform you about how we look after your personal data when you use our application and tell you about your privacy rights.
@@ -67,13 +67,13 @@ We may update this privacy policy from time to time. We will notify you of any c
 
 ### 9. Contact Us
 If you have questions about this privacy policy, please contact us at:
-[Your Contact Information]
+mariya.kl.ivanova@gmail.com
 
 ---
 
 ## Българска версия
 
-### Последна актуализация: [Текуща дата]
+### Последна актуализация: 24 май 2025 г.
 
 ### 1. Въведение
 Добре дошли във FinanceApp. Ние уважаваме вашата поверителност и се ангажираме да защитаваме вашите лични данни. Тази политика за поверителност ще ви информира как обработваме вашите лични данни, когато използвате нашето приложение, и ще ви разкаже за вашите права на поверителност.
@@ -138,4 +138,4 @@ If you have questions about this privacy policy, please contact us at:
 
 ### 9. Контакти
 Ако имате въпроси относно тази политика за поверителност, моля, свържете се с нас на:
-[Вашата контактна информация] 
+mariya.kl.ivanova@gmail.com 
